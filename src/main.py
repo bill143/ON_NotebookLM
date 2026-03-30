@@ -1,0 +1,233 @@
+"""
+Nexus Notebook 11 LM — FastAPI Application Entry Point
+Codename: ESPERANTO
+
+Unified API surface with:
+- Health check endpoints (liveness, readiness, startup)
+- Auth middleware with tenant context injection
+- CORS, error handling, and request tracing
+- Prometheus metrics endpoint
+- API versioning (/api/v1/)
+"""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from loguru import logger
+
+from src.config import get_settings
+from src.exceptions import NexusError
+
+
+# ── Lifespan ─────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application startup and shutdown lifecycle."""
+    settings = get_settings()
+
+    # Startup
+    from src.infra.nexus_obs_tracing import setup_logging
+    setup_logging(settings.log_level.value, settings.log_format)
+    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
+
+    from src.infra.nexus_data_persist import init_database
+    await init_database()
+    logger.info("Database initialized")
+
+    # Sentry integration
+    if settings.sentry_dsn:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            traces_sample_rate=0.1,
+            environment=settings.environment.value,
+            release=settings.app_version,
+        )
+        logger.info("Sentry initialized")
+
+    logger.info(f"{settings.app_name} ready — {settings.environment.value}")
+    yield
+
+    # Shutdown
+    from src.infra.nexus_data_persist import close_database
+    await close_database()
+    logger.info("Application shutdown complete")
+
+
+# ── Application ──────────────────────────────────────────────
+
+app = FastAPI(
+    title="Nexus Notebook 11 LM",
+    description="Production-grade NotebookLM module — Codename: ESPERANTO",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Request Middleware ───────────────────────────────────────
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    """Inject trace context and tenant isolation on every request."""
+    from src.infra.nexus_obs_tracing import trace_context, request_id_var
+
+    # Extract trace ID from header or generate new
+    trace_id = request.headers.get("X-Trace-ID", "")
+
+    # Extract tenant from auth header (if present)
+    user_id = ""
+    tenant_id = ""
+    auth = request.headers.get("Authorization", "")
+    if auth:
+        try:
+            from src.infra.nexus_vault_keys import AuthContext
+            ctx = AuthContext.from_token(auth.replace("Bearer ", ""))
+            user_id = ctx.user_id
+            tenant_id = ctx.tenant_id
+        except Exception:
+            pass  # Auth failures handled by route-level dependencies
+
+    async with trace_context(
+        f"{request.method} {request.url.path}",
+        user_id=user_id,
+        tenant_id=tenant_id,
+    ) as tid:
+        response = await call_next(request)
+        response.headers["X-Trace-ID"] = tid
+        response.headers["X-Request-ID"] = request_id_var.get("")
+        return response
+
+
+# ── Error Handlers ───────────────────────────────────────────
+
+@app.exception_handler(NexusError)
+async def nexus_error_handler(request: Request, exc: NexusError):
+    """Handle all NexusError subclasses with proper status codes."""
+    logger.log(
+        "ERROR" if exc.severity.value in ("high", "critical") else "WARNING",
+        f"API Error: {exc.error_code} — {exc.message}",
+        status_code=exc.status_code,
+        error_code=exc.error_code,
+        path=str(request.url.path),
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_dict(),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception):
+    """Catch-all for unhandled exceptions — never leak internals."""
+    logger.exception(f"Unhandled error on {request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred",
+                "retryable": False,
+            }
+        },
+    )
+
+
+# ── Health Checks (Feature 13E) ──────────────────────────────
+
+@app.get("/health/live", tags=["Health"])
+async def health_live():
+    """Liveness probe — is the process running?"""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready", tags=["Health"])
+async def health_ready():
+    """Readiness probe — can the service handle requests?"""
+    checks = {}
+
+    # Database check
+    try:
+        from src.infra.nexus_data_persist import get_session
+        from sqlalchemy import text
+        async with get_session() as session:
+            await session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {str(e)[:100]}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if all_ok else 503,
+        content={"status": "ready" if all_ok else "degraded", "checks": checks},
+    )
+
+
+@app.get("/health/startup", tags=["Health"])
+async def health_startup():
+    """Startup probe — has initialization completed?"""
+    from src.infra.nexus_data_persist import _engine
+    if _engine is None:
+        return JSONResponse(status_code=503, content={"status": "starting"})
+    return {"status": "started"}
+
+
+# ── Metrics Endpoint ─────────────────────────────────────────
+
+@app.get("/metrics", tags=["Observability"])
+async def prometheus_metrics():
+    """Prometheus metrics endpoint."""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
+
+# ── API Routes ───────────────────────────────────────────────
+
+from src.api.notebooks import router as notebooks_router
+from src.api.sources import router as sources_router
+from src.api.artifacts import router as artifacts_router
+from src.api.chat import router as chat_router
+from src.api.models import router as models_router
+from src.api.websocket import router as websocket_router
+from src.api.research import router as research_router
+from src.api.export import router as export_router
+from src.api.collaboration import router as collab_router
+
+app.include_router(notebooks_router, prefix="/api/v1")
+app.include_router(sources_router, prefix="/api/v1")
+app.include_router(artifacts_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
+app.include_router(models_router, prefix="/api/v1")
+app.include_router(websocket_router, prefix="/api/v1")
+app.include_router(research_router, prefix="/api/v1")
+app.include_router(export_router, prefix="/api/v1")
+app.include_router(collab_router, prefix="/api/v1")
+
+
+@app.get("/api/v1", tags=["Root"])
+async def api_root():
+    settings = get_settings()
+    return {
+        "service": settings.app_name,
+        "version": settings.app_version,
+        "codename": "ESPERANTO",
+    }
