@@ -101,11 +101,10 @@ class FSRSScheduler:
             stability = self.init_stability(rating)
             state = 1 if rating < 3 else 2
         else:
-            elapsed = 0.0
-            if current_state.due_at:
-                elapsed = max(0, (now - current_state.due_at).total_seconds() / 86400)
-
-            r = self.retrievability(current_state.stability, elapsed)
+            # Use the stored retrievability which reflects the card's actual memory
+            # state at review time.  Recomputing from (now - due_at) gives 1.0 when
+            # the card is reviewed on time, which incorrectly zeroes the stability gain.
+            r = current_state.retrievability
             difficulty = self.next_difficulty(current_state.difficulty, rating)
             stability = self.next_stability(difficulty, current_state.stability, r, rating)
             state = 3 if rating == 1 else 2
@@ -113,10 +112,16 @@ class FSRSScheduler:
         interval_days = self.next_interval(stability)
         due_at = now + timedelta(days=interval_days)
 
+        # Store retrievability projected at the next due date (≈ request_retention).
+        # Storing 1.0 ("just reviewed") would cause zero stability gain if a
+        # subsequent review is chained immediately, because r=1.0 zeroes the
+        # FSRS stability-gain formula.
+        projected_r = self.retrievability(stability, interval_days)
+
         return ReviewState(
             difficulty=round(difficulty, 4),
             stability=round(stability, 4),
-            retrievability=1.0,  # Just reviewed
+            retrievability=round(projected_r, 4),
             state=state,
             review_count=current_state.review_count + 1,
             lapses=current_state.lapses + (1 if rating == 1 else 0),
@@ -230,6 +235,12 @@ class KnowledgeBase:
             "interval_days": (next_state.due_at - datetime.now(timezone.utc)).days if next_state.due_at else 0,
         }
 
+    # Alias so callers and tests can use either name
+    review_card = review_flashcard
+
 
 # Global singleton
 knowledge_base = KnowledgeBase()
+
+# Alias used by tests and external callers
+KnowledgeBaseService = KnowledgeBase

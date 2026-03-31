@@ -260,6 +260,9 @@ document.addEventListener('keydown', e => {{ if(e.key==='ArrowRight')next(); if(
         h = hex_color.lstrip("#")
         return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
+    # Public alias so callers and tests can discover the HTML slideshow fallback
+    generate_html_slideshow = _compose_html_slideshow
+
 
 # Global singleton
 video_engine = VideoEngine()

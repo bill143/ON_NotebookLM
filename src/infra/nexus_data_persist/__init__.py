@@ -89,7 +89,8 @@ async def get_session(tenant_id: Optional[str] = None):
     try:
         if tenant_id:
             await session.execute(
-                text(f"SET LOCAL app.tenant_id = '{tenant_id}'")
+                text("SET LOCAL app.tenant_id = :tid"),
+                {"tid": tenant_id},
             )
 
         yield session

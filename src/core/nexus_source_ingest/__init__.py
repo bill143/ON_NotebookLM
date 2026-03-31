@@ -95,27 +95,85 @@ class ContentExtractor:
 
     @traced("source.extract.youtube")
     async def extract_youtube(self, url: str) -> str:
-        """Extract transcript from YouTube video."""
+        """Extract transcript and metadata from a YouTube video via yt-dlp.
+
+        Returns a formatted string containing video metadata (title,
+        description, duration, channel) followed by the full transcript
+        with timestamps.  The result is suitable for embedding and
+        storage as source_type = 'youtube'.
+        """
         try:
-            # Try youtube-transcript-api
-            from youtube_transcript_api import YouTubeTranscriptApi
+            import asyncio
 
-            # Extract video ID from URL
-            parsed = urlparse(url)
-            video_id = ""
-            if "youtube.com" in parsed.hostname or "":
-                from urllib.parse import parse_qs
-                video_id = parse_qs(parsed.query).get("v", [""])[0]
-            elif "youtu.be" in (parsed.hostname or ""):
-                video_id = parsed.path.strip("/")
+            import yt_dlp
 
-            if not video_id:
-                raise SourceProcessingError("Could not extract YouTube video ID")
+            ydl_opts: dict[str, Any] = {
+                "skip_download": True,
+                "writesubtitles": False,
+                "writeautomaticsub": False,
+                "quiet": True,
+                "no_warnings": True,
+            }
 
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            transcript = " ".join(entry["text"] for entry in transcript_list)
-            return transcript
+            loop = asyncio.get_event_loop()
 
+            def _fetch_info() -> dict[str, Any]:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    return ydl.extract_info(url, download=False) or {}  # type: ignore[return-value]
+
+            info: dict[str, Any] = await loop.run_in_executor(None, _fetch_info)
+
+            title: str = info.get("title", "Unknown Title")
+            description: str = info.get("description", "")
+            duration: int = info.get("duration", 0)
+            channel: str = info.get("uploader", info.get("channel", "Unknown Channel"))
+            upload_date: str = info.get("upload_date", "")
+
+            # Build transcript from subtitle entries when available
+            transcript_parts: list[str] = []
+            subtitles: dict[str, Any] = info.get("subtitles", {}) or {}
+            auto_subs: dict[str, Any] = info.get("automatic_captions", {}) or {}
+
+            # Prefer manual subtitles, fall back to auto-generated
+            sub_entries: list[dict[str, Any]] = []
+            for lang_key in ("en", "en-US", "en-GB"):
+                if lang_key in subtitles:
+                    sub_entries = subtitles[lang_key]
+                    break
+            if not sub_entries:
+                for lang_key in ("en", "en-US", "en-GB"):
+                    if lang_key in auto_subs:
+                        sub_entries = auto_subs[lang_key]
+                        break
+
+            if sub_entries:
+                for entry in sub_entries:
+                    text = entry.get("text") or entry.get("data") or ""
+                    start = entry.get("start", 0)
+                    if text:
+                        minutes, seconds = divmod(int(start), 60)
+                        transcript_parts.append(f"[{minutes:02d}:{seconds:02d}] {text}")
+
+            transcript_text = "\n".join(transcript_parts) if transcript_parts else description
+
+            if not transcript_text.strip():
+                raise EmptyContentError("YouTube video has no accessible transcript or description")
+
+            # Format duration as mm:ss
+            dur_minutes, dur_seconds = divmod(duration, 60)
+            dur_str = f"{dur_minutes}:{dur_seconds:02d}"
+
+            return (
+                f"# {title}\n\n"
+                f"**Channel:** {channel}\n"
+                f"**Duration:** {dur_str}\n"
+                f"**Upload Date:** {upload_date}\n\n"
+                f"## Description\n{description[:1000]}\n\n"
+                f"## Transcript\n{transcript_text}"
+            )
+
+        except (EmptyContentError, SourceProcessingError):
+            raise
         except Exception as e:
             raise SourceProcessingError(f"YouTube extraction failed: {e}", original_error=e)
 
