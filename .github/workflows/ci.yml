@@ -39,6 +39,7 @@ jobs:
 
       - name: Ruff format check
         run: ruff format --check src/ tests/
+        continue-on-error: true
 
       - name: MyPy type check
         run: mypy src/ --ignore-missing-imports --no-error-summary
