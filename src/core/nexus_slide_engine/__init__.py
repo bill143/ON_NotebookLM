@@ -220,7 +220,7 @@ class SlideEngine:
                     ))
             else:
                 # No heading — treat as content slide
-                lines = [l.strip() for l in section.split("\n") if l.strip()]
+                lines = [line.strip() for line in section.split("\n") if line.strip()]
                 if lines:
                     slides.append(SlideContent(
                         title=lines[0][:80],
