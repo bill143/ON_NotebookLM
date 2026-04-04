@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Generic, Optional, Sequence, TypeVar
 
 from loguru import logger
-from sqlalchemy import MetaData, text, select, update, delete, func, and_
+from sqlalchemy import MetaData, text, select, update as sa_update, delete, func, and_
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
