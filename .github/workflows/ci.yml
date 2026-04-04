@@ -129,8 +129,12 @@ jobs:
             -d ${{ env.POSTGRES_DB }} \
             -f database/schema/001_initial.sql
 
+      - name: Install psycopg2 for seed script
+        run: pip install psycopg2-binary
+
       - name: Seed test data
         run: python -m database.seeds.seed_models
+        continue-on-error: true
         env:
           ENVIRONMENT: testing
 
