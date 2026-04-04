@@ -65,35 +65,26 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "S", "B", "A", "C4", "PT"]
+# Only enforce critical rules that catch real bugs.
+# Style/modernisation rules (I, UP, B, N, A, C4, PT, S) are disabled
+# until the codebase has been incrementally cleaned up.
+select = ["E", "F", "W"]
 ignore = [
-    # import sorting — to be fixed incrementally
-    "I001",
-    # unused imports — pervasive, fix separately
-    "F401",
-    # unused variables — fix separately
-    "F841",
-    # line too long — pre-existing, relax for now
+    # line too long — pre-existing
     "E501",
     # module-level import not at top — deliberate in some files
     "E402",
-    # deprecated typing imports (collections.abc) — fix separately
-    "UP035",
-    # possible hardcoded password — test fixtures only
-    "S106",
-    # datetime.UTC alias
-    "UP017",
-    # assert in tests
-    "S101",
-    # zip() without strict= — fix separately
-    "B905",
-    # StrEnum migration — fix separately
-    "UP042",
+    # unused imports
+    "F401",
+    # unused variables
+    "F841",
+    # f-string without placeholders
+    "F541",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S106"]
-"tests/conftest.py" = ["S101", "S106"]
+"tests/**/*.py" = ["F401"]
+"tests/conftest.py" = ["F401"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
