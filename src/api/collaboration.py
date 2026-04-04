@@ -533,7 +533,7 @@ class CollaborationHub:
             "total_connections": len(self._users),
             "active_notebooks": len(self._notebook_users),
             "active_locks": len(
-                [l for l in self._locks.values() if not l.is_expired]
+                [lock for lock in self._locks.values() if not lock.is_expired]
             ),
         }
 
