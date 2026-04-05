@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
+import { api, type PodcastPresetCatalog } from "@/lib/api";
 import { ResearchPanel } from "@/components/ResearchPanel";
 import { NotesPanel } from "@/components/NotesPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -572,6 +573,55 @@ function ChatPanel() {
 
 function StudioPanel() {
   const { activeNotebook, artifacts, createArtifact } = useAppStore();
+  const [presetCatalog, setPresetCatalog] = useState<PodcastPresetCatalog | null>(null);
+  const [podcastPreset, setPodcastPreset] = useState({
+    format: "conversational",
+    length: "medium",
+    language: "English",
+    speaker_profile: "expert_student",
+    speech_rate: 1.0,
+  });
+  const [loadingPresets, setLoadingPresets] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadPresets = async () => {
+      setLoadingPresets(true);
+      try {
+        const catalog = await api.getPodcastPresets();
+        if (!mounted) return;
+        setPresetCatalog(catalog);
+        setPodcastPreset({
+          format: catalog.default.format,
+          length: catalog.default.length,
+          language: catalog.default.language,
+          speaker_profile: catalog.default.speaker_profile,
+          speech_rate: catalog.default.speech_rate,
+        });
+      } catch (error) {
+        console.error("Failed to load podcast presets:", error);
+      } finally {
+        if (mounted) setLoadingPresets(false);
+      }
+    };
+
+    loadPresets();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const formatOptions =
+    presetCatalog?.formats ?? ["conversational", "deep_dive", "briefing", "debate", "critique"];
+  const lengthOptions = presetCatalog?.lengths ?? ["short", "medium", "long", "longform"];
+  const languageOptions =
+    presetCatalog?.languages_hint ?? ["English", "Spanish", "French", "German", "Portuguese"];
+  const speakerProfileOptions =
+    presetCatalog?.speaker_profiles ??
+    ["expert_student", "two_experts", "interviewer_guest", "debate_hosts", "storyteller_analyst"];
+  const minSpeechRate = presetCatalog?.speech_rate_range.min ?? 0.8;
+  const maxSpeechRate = presetCatalog?.speech_rate_range.max ?? 1.25;
 
   const artifactTypes = [
     { type: "summary", label: "Summary", icon: FileText, desc: "Comprehensive document summary" },
@@ -580,12 +630,17 @@ function StudioPanel() {
     { type: "flashcard", label: "Flashcards", icon: Layers, desc: "Spaced repetition cards" },
   ];
 
-  const handleCreate = async (type: string, label: string) => {
+  const handleCreate = async (
+    type: string,
+    label: string,
+    generationConfig?: Record<string, unknown>
+  ) => {
     if (!activeNotebook) return;
     await createArtifact({
       notebook_id: activeNotebook.id,
       title: `${label} — ${activeNotebook.name}`,
       artifact_type: type,
+      generation_config: generationConfig,
     });
   };
 
@@ -603,7 +658,13 @@ function StudioPanel() {
         {artifactTypes.map(({ type, label, icon: Icon, desc }) => (
           <button
             key={type}
-            onClick={() => handleCreate(type, label)}
+            onClick={() =>
+              handleCreate(
+                type,
+                label,
+                type === "podcast" ? podcastPreset : undefined
+              )
+            }
             className="glass-card p-5 text-left group"
           >
             <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
@@ -613,6 +674,104 @@ function StudioPanel() {
             <p className="text-xs text-muted-foreground">{desc}</p>
           </button>
         ))}
+      </div>
+
+      {/* Podcast Presets */}
+      <div className="glass-card p-4 mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold">Podcast Presets</h3>
+          <span className="text-[11px] text-muted-foreground">
+            {loadingPresets ? "Loading presets..." : "Loaded from API presets"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-xs text-muted-foreground">
+            Format
+            <select
+              value={podcastPreset.format}
+              onChange={(e) => setPodcastPreset({ ...podcastPreset, format: e.target.value })}
+              className="mt-1 w-full h-9 px-2 rounded-md bg-secondary/50 border border-border text-sm"
+            >
+              {formatOptions.map((fmt) => (
+                <option key={fmt} value={fmt}>
+                  {fmt.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-xs text-muted-foreground">
+            Length
+            <select
+              value={podcastPreset.length}
+              onChange={(e) => setPodcastPreset({ ...podcastPreset, length: e.target.value })}
+              className="mt-1 w-full h-9 px-2 rounded-md bg-secondary/50 border border-border text-sm"
+            >
+              {lengthOptions.map((length) => (
+                <option key={length} value={length}>
+                  {length}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-xs text-muted-foreground">
+            Language
+            <select
+              value={podcastPreset.language}
+              onChange={(e) => setPodcastPreset({ ...podcastPreset, language: e.target.value })}
+              className="mt-1 w-full h-9 px-2 rounded-md bg-secondary/50 border border-border text-sm"
+            >
+              {languageOptions.map((language) => (
+                <option key={language} value={language}>
+                  {language}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-xs text-muted-foreground">
+            Speaker Profile
+            <select
+              value={podcastPreset.speaker_profile}
+              onChange={(e) =>
+                setPodcastPreset({ ...podcastPreset, speaker_profile: e.target.value })
+              }
+              className="mt-1 w-full h-9 px-2 rounded-md bg-secondary/50 border border-border text-sm"
+            >
+              {speakerProfileOptions.map((profile) => (
+                <option key={profile} value={profile}>
+                  {profile.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="mt-3">
+          <label className="text-xs text-muted-foreground flex items-center justify-between">
+            <span>Speech Rate</span>
+            <span className="font-mono text-foreground">{podcastPreset.speech_rate.toFixed(2)}x</span>
+          </label>
+          <input
+            type="range"
+            min={minSpeechRate}
+            max={maxSpeechRate}
+            step={0.05}
+            value={podcastPreset.speech_rate}
+            onChange={(e) =>
+              setPodcastPreset({ ...podcastPreset, speech_rate: Number(e.target.value) })
+            }
+            className="w-full mt-1"
+          />
+        </div>
+        <div className="mt-3">
+          <button
+            onClick={() => handleCreate("podcast", "Podcast", podcastPreset)}
+            className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-all"
+          >
+            Generate Podcast With Preset
+          </button>
+        </div>
       </div>
 
       {/* Generated Artifacts */}

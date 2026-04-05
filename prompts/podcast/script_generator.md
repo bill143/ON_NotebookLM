@@ -10,6 +10,9 @@ Generate an engaging, natural-sounding podcast conversation between {{ num_speak
 
 ## Tone: {{ tone }}
 ## Target Length: {{ length }}
+## Language: {{ language }}
+## Format: {{ format_style }}
+## Format Guidance: {{ format_instruction }}
 
 ## Source Material
 
@@ -31,6 +34,7 @@ Use XML tags to identify speakers:
 6. **Clear transitions**: Signal topic changes naturally
 7. **Strong opening**: Hook the listener in the first 30 seconds
 8. **Memorable closing**: End with a key takeaway or thought-provoking question
+9. **Language compliance**: Write the full dialogue in {{ language }}
 
 ## Length Guidelines
 - short: 8-12 dialogue exchanges

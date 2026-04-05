@@ -2,24 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from src.infra.nexus_vault_keys import AuthContext, get_current_user
-from src.infra.nexus_obs_tracing import traced
 from src.exceptions import NotFoundError
+from src.infra.nexus_obs_tracing import traced
+from src.infra.nexus_vault_keys import AuthContext, get_current_user
 
 router = APIRouter(prefix="/research", tags=["Research"])
 
 
 # ── Schemas ──────────────────────────────────────────────────
 
+
 class ResearchQuery(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000)
-    session_id: Optional[str] = Field(None, description="Resume existing session")
-    notebook_id: Optional[str] = Field(None, description="Restrict to notebook sources")
+    session_id: str | None = Field(None, description="Resume existing session")
+    notebook_id: str | None = Field(None, description="Restrict to notebook sources")
+    profile: str = Field(
+        default="standard",
+        description="Research depth profile: auto | quick | standard | deep",
+    )
+    max_follow_ups: int | None = Field(
+        default=None,
+        ge=0,
+        le=10,
+        description="Override the number of generated follow-up questions",
+    )
 
 
 class ResearchResult(BaseModel):
@@ -32,12 +43,13 @@ class ResearchResult(BaseModel):
     model_used: str = ""
     latency_ms: float = 0.0
     total_turns: int = 0
+    profile_used: str = "standard"
 
 
 class ResearchSessionSummary(BaseModel):
     id: str
     title: str
-    notebook_id: Optional[str]
+    notebook_id: str | None
     turn_count: int
     total_tokens: int
     created_at: str
@@ -46,12 +58,13 @@ class ResearchSessionSummary(BaseModel):
 
 # ── Endpoints ────────────────────────────────────────────────
 
+
 @router.post("", response_model=ResearchResult)
 @traced("research.query")
 async def research_query(
     data: ResearchQuery,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> ResearchResult:
     """Execute a research turn — creates or resumes a session."""
     from src.core.nexus_research_grounding import research_graph
 
@@ -61,17 +74,48 @@ async def research_query(
         notebook_id=data.notebook_id or "",
         tenant_id=auth.tenant_id,
         user_id=auth.user_id,
+        profile=data.profile,
+        max_follow_ups=data.max_follow_ups,
     )
-    return result
+    return ResearchResult.model_validate(result)
+
+
+@router.get("/profiles", response_model=dict)
+@traced("research.profiles")
+async def research_profiles(
+    auth: AuthContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """List supported research profiles and tuning knobs."""
+    return {
+        "default": "standard",
+        "profiles": {
+            "quick": {
+                "description": "Fast response with lighter retrieval and fewer follow-ups",
+                "best_for": ["quick checks", "low-latency answers"],
+            },
+            "standard": {
+                "description": "Balanced quality, latency, and token usage",
+                "best_for": ["general research", "iterative exploration"],
+            },
+            "deep": {
+                "description": "Maximum context retrieval and richer synthesis",
+                "best_for": ["complex analysis", "exhaustive source synthesis"],
+            },
+            "auto": {
+                "description": "Automatically chooses quick/standard/deep from query complexity",
+                "best_for": ["mixed workloads", "hands-off optimization"],
+            },
+        },
+    }
 
 
 @router.get("/sessions", response_model=list[dict])
 @traced("research.list_sessions")
 async def list_research_sessions(
     auth: AuthContext = Depends(get_current_user),
-    notebook_id: Optional[str] = None,
+    notebook_id: str | None = None,
     limit: int = Query(20, le=50),
-):
+) -> list[dict[str, Any]]:
     """List research sessions for the current user."""
     from src.core.nexus_research_grounding import research_graph
 
@@ -87,7 +131,7 @@ async def list_research_sessions(
 async def get_research_session(
     session_id: str,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Get full research session with all turns and citations."""
     from src.core.nexus_research_grounding import research_graph
 

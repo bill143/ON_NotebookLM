@@ -27,7 +27,7 @@ RUN apt-get update && \
 FROM base AS dependencies
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e ".[dev]"
+RUN pip install --no-cache-dir ".[dev]"
 
 # ── Stage 3: Development ─────────────────────────────────────
 FROM dependencies AS development
@@ -42,7 +42,7 @@ FROM base AS production
 
 # Install production deps only
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e "."
+RUN pip install --no-cache-dir "."
 
 # Copy application code
 COPY src/ ./src/
@@ -50,12 +50,18 @@ COPY prompts/ ./prompts/
 COPY database/ ./database/
 COPY alembic.ini ./
 
+# Entrypoint script that runs migrations before starting the server
+RUN printf '#!/bin/sh\nset -e\necho "Running database migrations..."\nalembic upgrade head || echo "Migration skipped (DB may not be ready or no new migrations)"\nexec "$@"\n' > /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
 # Create non-root user
 RUN useradd -m -s /bin/bash nexus && \
     mkdir -p /app/storage /app/logs && \
     chown -R nexus:nexus /app
 
 USER nexus
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

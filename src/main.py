@@ -12,10 +12,11 @@ Unified API surface with:
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -23,26 +24,33 @@ from loguru import logger
 from src.config import get_settings
 from src.exceptions import NexusError
 
-
 # ── Lifespan ─────────────────────────────────────────────────
 
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown lifecycle."""
     settings = get_settings()
 
     # Startup
     from src.infra.nexus_obs_tracing import setup_logging
+
     setup_logging(settings.log_level.value, settings.log_format)
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
 
+    from src.infra.nexus_ws_broker import ws_broker
+
+    await ws_broker.connect()
+
     from src.infra.nexus_data_persist import init_database
+
     await init_database()
     logger.info("Database initialized")
 
     # Sentry integration
     if settings.sentry_dsn:
         import sentry_sdk
+
         sentry_sdk.init(
             dsn=settings.sentry_dsn,
             traces_sample_rate=0.1,
@@ -56,7 +64,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     from src.infra.nexus_data_persist import close_database
+
     await close_database()
+    await ws_broker.disconnect()
     logger.info("Application shutdown complete")
 
 
@@ -71,10 +81,11 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# CORS
+# CORS — origins loaded from settings (CORS_ORIGINS env var or .env)
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000"],
+    allow_origins=_settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,13 +94,14 @@ app.add_middleware(
 
 # ── Request Middleware ───────────────────────────────────────
 
+
 @app.middleware("http")
-async def request_context_middleware(request: Request, call_next):
+async def request_context_middleware(request: Request, call_next) -> Response:
     """Inject trace context and tenant isolation on every request."""
-    from src.infra.nexus_obs_tracing import trace_context, request_id_var
+    from src.infra.nexus_obs_tracing import request_id_var, trace_context
 
     # Extract trace ID from header or generate new
-    trace_id = request.headers.get("X-Trace-ID", "")
+    request.headers.get("X-Trace-ID", "")
 
     # Extract tenant from auth header (if present)
     user_id = ""
@@ -98,11 +110,15 @@ async def request_context_middleware(request: Request, call_next):
     if auth:
         try:
             from src.infra.nexus_vault_keys import AuthContext
+
             ctx = AuthContext.from_token(auth.replace("Bearer ", ""))
             user_id = ctx.user_id
             tenant_id = ctx.tenant_id
         except Exception:
-            pass  # Auth failures handled by route-level dependencies
+            logger.debug(
+                "Optional auth parse for tracing skipped (invalid or missing token)",
+                exc_info=True,
+            )
 
     async with trace_context(
         f"{request.method} {request.url.path}",
@@ -112,13 +128,14 @@ async def request_context_middleware(request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Trace-ID"] = tid
         response.headers["X-Request-ID"] = request_id_var.get("")
-        return response
+        return cast(Response, response)
 
 
 # ── Error Handlers ───────────────────────────────────────────
 
+
 @app.exception_handler(NexusError)
-async def nexus_error_handler(request: Request, exc: NexusError):
+async def nexus_error_handler(request: Request, exc: NexusError) -> JSONResponse:
     """Handle all NexusError subclasses with proper status codes."""
     logger.log(
         "ERROR" if exc.severity.value in ("high", "critical") else "WARNING",
@@ -134,7 +151,7 @@ async def nexus_error_handler(request: Request, exc: NexusError):
 
 
 @app.exception_handler(Exception)
-async def unhandled_error_handler(request: Request, exc: Exception):
+async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for unhandled exceptions — never leak internals."""
     logger.exception(f"Unhandled error on {request.method} {request.url.path}")
     return JSONResponse(
@@ -151,21 +168,24 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 
 # ── Health Checks (Feature 13E) ──────────────────────────────
 
+
 @app.get("/health/live", tags=["Health"])
-async def health_live():
+async def health_live() -> dict[str, Any]:
     """Liveness probe — is the process running?"""
     return {"status": "alive"}
 
 
 @app.get("/health/ready", tags=["Health"])
-async def health_ready():
+async def health_ready() -> JSONResponse:
     """Readiness probe — can the service handle requests?"""
     checks = {}
 
     # Database check
     try:
-        from src.infra.nexus_data_persist import get_session
         from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
         async with get_session() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
@@ -179,10 +199,11 @@ async def health_ready():
     )
 
 
-@app.get("/health/startup", tags=["Health"])
-async def health_startup():
+@app.get("/health/startup", tags=["Health"], response_model=None)
+async def health_startup() -> JSONResponse | dict[str, Any]:
     """Startup probe — has initialization completed?"""
     from src.infra.nexus_data_persist import _engine
+
     if _engine is None:
         return JSONResponse(status_code=503, content={"status": "starting"})
     return {"status": "started"}
@@ -190,10 +211,12 @@ async def health_startup():
 
 # ── Metrics Endpoint ─────────────────────────────────────────
 
+
 @app.get("/metrics", tags=["Observability"])
-async def prometheus_metrics():
+async def prometheus_metrics() -> Response:
     """Prometheus metrics endpoint."""
-    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
     return Response(
         content=generate_latest(),
         media_type=CONTENT_TYPE_LATEST,
@@ -202,15 +225,18 @@ async def prometheus_metrics():
 
 # ── API Routes ───────────────────────────────────────────────
 
-from src.api.notebooks import router as notebooks_router
-from src.api.sources import router as sources_router
 from src.api.artifacts import router as artifacts_router
 from src.api.chat import router as chat_router
-from src.api.models import router as models_router
-from src.api.websocket import router as websocket_router
-from src.api.research import router as research_router
-from src.api.export import router as export_router
 from src.api.collaboration import router as collab_router
+from src.api.debate import router as debate_router
+from src.api.export import router as export_router
+from src.api.mindmap import router as mindmap_router
+from src.api.models import router as models_router
+from src.api.notebooks import router as notebooks_router
+from src.api.research import router as research_router
+from src.api.sources import router as sources_router
+from src.api.verification import router as verification_router
+from src.api.websocket import router as websocket_router
 
 app.include_router(notebooks_router, prefix="/api/v1")
 app.include_router(sources_router, prefix="/api/v1")
@@ -221,10 +247,13 @@ app.include_router(websocket_router, prefix="/api/v1")
 app.include_router(research_router, prefix="/api/v1")
 app.include_router(export_router, prefix="/api/v1")
 app.include_router(collab_router, prefix="/api/v1")
+app.include_router(verification_router, prefix="/api/v1")
+app.include_router(mindmap_router, prefix="/api/v1")
+app.include_router(debate_router, prefix="/api/v1")
 
 
 @app.get("/api/v1", tags=["Root"])
-async def api_root():
+async def api_root() -> dict[str, Any]:
     settings = get_settings()
     return {
         "service": settings.app_name,

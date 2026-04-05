@@ -13,23 +13,23 @@ Provides:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from src.exceptions import AuthError
+from src.infra.nexus_ws_broker import ws_broker
 
 router = APIRouter(tags=["Collaboration"])
 
 
 # ── Types ────────────────────────────────────────────────────
+
 
 class UserStatus(str, Enum):
     ACTIVE = "active"
@@ -54,6 +54,7 @@ class ActivityType(str, Enum):
 @dataclass
 class PresenceUser:
     """A user present in a collaborative workspace."""
+
     user_id: str
     tenant_id: str
     display_name: str
@@ -62,8 +63,8 @@ class PresenceUser:
     websocket: WebSocket
     notebook_id: str = ""
     status: UserStatus = UserStatus.ACTIVE
-    cursor_position: Optional[dict] = None     # {section, offset}
-    selection: Optional[dict] = None           # {start, end}
+    cursor_position: dict | None = None  # {section, offset}
+    selection: dict | None = None  # {start, end}
     last_activity: float = field(default_factory=time.time)
     joined_at: float = field(default_factory=time.time)
 
@@ -86,11 +87,12 @@ class PresenceUser:
 @dataclass
 class NotebookLock:
     """Lock for exclusive editing of notebook content."""
+
     notebook_id: str
     section_id: str
-    locked_by: str          # user_id
+    locked_by: str  # user_id
     locked_at: float
-    expires_at: float       # Auto-expire after timeout
+    expires_at: float  # Auto-expire after timeout
 
     @property
     def is_expired(self) -> bool:
@@ -100,6 +102,7 @@ class NotebookLock:
 @dataclass
 class CollaborationEvent:
     """An event in the collaboration activity stream."""
+
     event_id: str
     event_type: ActivityType
     user_id: str
@@ -121,6 +124,7 @@ class CollaborationEvent:
 
 
 # ── Collaboration Hub ────────────────────────────────────────
+
 
 class CollaborationHub:
     """
@@ -158,8 +162,14 @@ class CollaborationHub:
 
         # Generate consistent avatar color from user_id
         colors = [
-            "#ef4444", "#f97316", "#eab308", "#22c55e",
-            "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
+            "#ef4444",
+            "#f97316",
+            "#eab308",
+            "#22c55e",
+            "#06b6d4",
+            "#3b82f6",
+            "#8b5cf6",
+            "#ec4899",
         ]
         color = colors[hash(user_id) % len(colors)]
 
@@ -182,25 +192,29 @@ class CollaborationHub:
             self._notebook_users[notebook_id].add(conn_id)
 
         # Broadcast join event
-        await self._broadcast_to_notebook(notebook_id, {
-            "type": "presence_join",
-            "user": user.to_presence_dict(),
-            "active_users": self._get_notebook_presence(notebook_id),
-        }, exclude=conn_id)
+        await self._broadcast_to_notebook(
+            notebook_id,
+            {
+                "type": "presence_join",
+                "user": user.to_presence_dict(),
+                "active_users": self._get_notebook_presence(notebook_id),
+            },
+            exclude=conn_id,
+        )
 
         # Record activity
-        self._add_activity(CollaborationEvent(
-            event_id=str(uuid.uuid4())[:8],
-            event_type=ActivityType.JOIN,
-            user_id=user_id,
-            display_name=display_name,
-            notebook_id=notebook_id,
-            timestamp=time.time(),
-        ))
-
-        logger.info(
-            f"Collab connected: {display_name} ({conn_id}) → notebook:{notebook_id}"
+        self._add_activity(
+            CollaborationEvent(
+                event_id=str(uuid.uuid4())[:8],
+                event_type=ActivityType.JOIN,
+                user_id=user_id,
+                display_name=display_name,
+                notebook_id=notebook_id,
+                timestamp=time.time(),
+            )
         )
+
+        logger.info(f"Collab connected: {display_name} ({conn_id}) → notebook:{notebook_id}")
 
         return conn_id
 
@@ -219,28 +233,32 @@ class CollaborationHub:
 
             # Release any locks held by this user
             expired_locks = [
-                key for key, lock in self._locks.items()
-                if lock.locked_by == user.user_id
+                key for key, lock in self._locks.items() if lock.locked_by == user.user_id
             ]
             for key in expired_locks:
                 del self._locks[key]
 
             # Broadcast leave
-            await self._broadcast_to_notebook(notebook_id, {
-                "type": "presence_leave",
-                "user_id": user.user_id,
-                "display_name": user.display_name,
-                "active_users": self._get_notebook_presence(notebook_id),
-            })
+            await self._broadcast_to_notebook(
+                notebook_id,
+                {
+                    "type": "presence_leave",
+                    "user_id": user.user_id,
+                    "display_name": user.display_name,
+                    "active_users": self._get_notebook_presence(notebook_id),
+                },
+            )
 
-            self._add_activity(CollaborationEvent(
-                event_id=str(uuid.uuid4())[:8],
-                event_type=ActivityType.LEAVE,
-                user_id=user.user_id,
-                display_name=user.display_name,
-                notebook_id=notebook_id,
-                timestamp=time.time(),
-            ))
+            self._add_activity(
+                CollaborationEvent(
+                    event_id=str(uuid.uuid4())[:8],
+                    event_type=ActivityType.LEAVE,
+                    user_id=user.user_id,
+                    display_name=user.display_name,
+                    notebook_id=notebook_id,
+                    timestamp=time.time(),
+                )
+            )
 
             logger.info(f"Collab disconnected: {user.display_name} ({conn_id})")
 
@@ -250,7 +268,7 @@ class CollaborationHub:
         self,
         conn_id: str,
         event: dict[str, Any],
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Process an incoming collaboration event."""
         user = self._users.get(conn_id)
         if not user:
@@ -303,41 +321,49 @@ class CollaborationHub:
         self,
         user: PresenceUser,
         event: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Broadcast cursor position to other users."""
         user.cursor_position = event.get("position")
 
-        await self._broadcast_to_notebook(user.notebook_id, {
-            "type": "cursor_update",
-            "user_id": user.user_id,
-            "display_name": user.display_name,
-            "avatar_color": user.avatar_color,
-            "position": user.cursor_position,
-        }, exclude=user.connection_id)
+        await self._broadcast_to_notebook(
+            user.notebook_id,
+            {
+                "type": "cursor_update",
+                "user_id": user.user_id,
+                "display_name": user.display_name,
+                "avatar_color": user.avatar_color,
+                "position": user.cursor_position,
+            },
+            exclude=user.connection_id,
+        )
         return None
 
     async def _handle_selection(
         self,
         user: PresenceUser,
         event: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Broadcast selection range to other users."""
         user.selection = event.get("selection")
 
-        await self._broadcast_to_notebook(user.notebook_id, {
-            "type": "selection_update",
-            "user_id": user.user_id,
-            "display_name": user.display_name,
-            "avatar_color": user.avatar_color,
-            "selection": user.selection,
-        }, exclude=user.connection_id)
+        await self._broadcast_to_notebook(
+            user.notebook_id,
+            {
+                "type": "selection_update",
+                "user_id": user.user_id,
+                "display_name": user.display_name,
+                "avatar_color": user.avatar_color,
+                "selection": user.selection,
+            },
+            exclude=user.connection_id,
+        )
         return None
 
     async def _handle_content_edit(
         self,
         user: PresenceUser,
         event: dict[str, Any],
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Handle content edits with optimistic locking."""
         section_id = event.get("section_id", "")
         lock_key = f"{user.notebook_id}:{section_id}"
@@ -352,26 +378,32 @@ class CollaborationHub:
             }
 
         # Broadcast edit to others
-        await self._broadcast_to_notebook(user.notebook_id, {
-            "type": "content_edit",
-            "user_id": user.user_id,
-            "display_name": user.display_name,
-            "section_id": section_id,
-            "operation": event.get("operation"),  # "insert", "delete", "replace"
-            "content": event.get("content", ""),
-            "position": event.get("position"),
-            "version": event.get("version", 0),
-        }, exclude=user.connection_id)
+        await self._broadcast_to_notebook(
+            user.notebook_id,
+            {
+                "type": "content_edit",
+                "user_id": user.user_id,
+                "display_name": user.display_name,
+                "section_id": section_id,
+                "operation": event.get("operation"),  # "insert", "delete", "replace"
+                "content": event.get("content", ""),
+                "position": event.get("position"),
+                "version": event.get("version", 0),
+            },
+            exclude=user.connection_id,
+        )
 
-        self._add_activity(CollaborationEvent(
-            event_id=str(uuid.uuid4())[:8],
-            event_type=ActivityType.CONTENT_EDIT,
-            user_id=user.user_id,
-            display_name=user.display_name,
-            notebook_id=user.notebook_id,
-            timestamp=time.time(),
-            data={"section_id": section_id},
-        ))
+        self._add_activity(
+            CollaborationEvent(
+                event_id=str(uuid.uuid4())[:8],
+                event_type=ActivityType.CONTENT_EDIT,
+                user_id=user.user_id,
+                display_name=user.display_name,
+                notebook_id=user.notebook_id,
+                timestamp=time.time(),
+                data={"section_id": section_id},
+            )
+        )
 
         return {"type": "edit_ack", "version": event.get("version", 0) + 1}
 
@@ -379,14 +411,18 @@ class CollaborationHub:
         self,
         user: PresenceUser,
         is_typing: bool,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Broadcast typing indicator."""
-        await self._broadcast_to_notebook(user.notebook_id, {
-            "type": "typing_indicator",
-            "user_id": user.user_id,
-            "display_name": user.display_name,
-            "is_typing": is_typing,
-        }, exclude=user.connection_id)
+        await self._broadcast_to_notebook(
+            user.notebook_id,
+            {
+                "type": "typing_indicator",
+                "user_id": user.user_id,
+                "display_name": user.display_name,
+                "is_typing": is_typing,
+            },
+            exclude=user.connection_id,
+        )
         return None
 
     async def _handle_lock_request(
@@ -419,13 +455,17 @@ class CollaborationHub:
         )
         self._locks[lock_key] = lock
 
-        await self._broadcast_to_notebook(user.notebook_id, {
-            "type": "section_locked",
-            "section_id": section_id,
-            "locked_by": user.user_id,
-            "display_name": user.display_name,
-            "expires_at": lock.expires_at,
-        }, exclude=user.connection_id)
+        await self._broadcast_to_notebook(
+            user.notebook_id,
+            {
+                "type": "section_locked",
+                "section_id": section_id,
+                "locked_by": user.user_id,
+                "display_name": user.display_name,
+                "expires_at": lock.expires_at,
+            },
+            exclude=user.connection_id,
+        )
 
         return {
             "type": "lock_granted",
@@ -448,11 +488,15 @@ class CollaborationHub:
             self._locks[lock_key] = lock
             return {"type": "lock_release_denied"}
 
-        await self._broadcast_to_notebook(user.notebook_id, {
-            "type": "section_unlocked",
-            "section_id": section_id,
-            "released_by": user.user_id,
-        }, exclude=user.connection_id)
+        await self._broadcast_to_notebook(
+            user.notebook_id,
+            {
+                "type": "section_unlocked",
+                "section_id": section_id,
+                "released_by": user.user_id,
+            },
+            exclude=user.connection_id,
+        )
 
         return {"type": "lock_released", "section_id": section_id}
 
@@ -464,32 +508,37 @@ class CollaborationHub:
         data: dict[str, Any],
         exclude: str = "",
     ) -> None:
-        """Send data to all users in a notebook."""
+        """Send data to all users in a notebook (local + cross-worker via Redis)."""
+        # Publish to Redis for cross-worker relay
+        user = self._users.get(exclude)
+        tenant_id = user.tenant_id if user else ""
+        if tenant_id:
+            await ws_broker.publish(
+                f"tenant:{tenant_id}:collab:{notebook_id}",
+                {**data, "_exclude_conn": exclude},
+            )
+
+        # Deliver to local connections
         conn_ids = self._notebook_users.get(notebook_id, set())
         dead: list[str] = []
 
         for conn_id in conn_ids:
             if conn_id == exclude:
                 continue
-            user = self._users.get(conn_id)
-            if user:
+            local_user = self._users.get(conn_id)
+            if local_user:
                 try:
-                    await user.websocket.send_json(data)
+                    await local_user.websocket.send_json(data)
                 except Exception:
                     dead.append(conn_id)
 
-        # Clean up dead connections
         for conn_id in dead:
             await self.disconnect(conn_id)
 
     def _get_notebook_presence(self, notebook_id: str) -> list[dict[str, Any]]:
         """Get presence list for a notebook."""
         conn_ids = self._notebook_users.get(notebook_id, set())
-        return [
-            self._users[cid].to_presence_dict()
-            for cid in conn_ids
-            if cid in self._users
-        ]
+        return [self._users[cid].to_presence_dict() for cid in conn_ids if cid in self._users]
 
     # ── Activity Feed ────────────────────────────────
 
@@ -515,15 +564,18 @@ class CollaborationHub:
     async def check_idle_users(self) -> None:
         """Check for idle users and update status."""
         now = time.time()
-        for conn_id, user in list(self._users.items()):
+        for _conn_id, user in list(self._users.items()):
             if user.status == UserStatus.ACTIVE:
                 if now - user.last_activity > self._idle_timeout:
                     user.status = UserStatus.IDLE
-                    await self._broadcast_to_notebook(user.notebook_id, {
-                        "type": "presence_status",
-                        "user_id": user.user_id,
-                        "status": UserStatus.IDLE.value,
-                    })
+                    await self._broadcast_to_notebook(
+                        user.notebook_id,
+                        {
+                            "type": "presence_status",
+                            "user_id": user.user_id,
+                            "status": UserStatus.IDLE.value,
+                        },
+                    )
 
     # ── Stats ────────────────────────────────────────
 
@@ -532,9 +584,7 @@ class CollaborationHub:
         return {
             "total_connections": len(self._users),
             "active_notebooks": len(self._notebook_users),
-            "active_locks": len(
-                [l for l in self._locks.values() if not l.is_expired]
-            ),
+            "active_locks": len([lock for lock in self._locks.values() if not lock.is_expired]),
         }
 
 
@@ -544,9 +594,11 @@ collab_hub = CollaborationHub()
 
 # ── WebSocket Endpoints ──────────────────────────────────────
 
+
 def _authenticate(token: str) -> tuple[str, str, str]:
     """Authenticate and return (user_id, tenant_id, display_name)."""
     from src.infra.nexus_vault_keys import verify_token
+
     payload = verify_token(token)
     return payload["sub"], payload["tid"], payload.get("name", payload["sub"][:8])
 
@@ -556,7 +608,7 @@ async def websocket_collab(
     websocket: WebSocket,
     token: str = Query(...),
     notebook_id: str = Query(...),
-):
+) -> None:
     """
     WebSocket endpoint for real-time collaboration.
 
@@ -578,18 +630,18 @@ async def websocket_collab(
         await websocket.close(code=4001, reason="Authentication failed")
         return
 
-    conn_id = await collab_hub.connect(
-        websocket, user_id, tenant_id, display_name, notebook_id
-    )
+    conn_id = await collab_hub.connect(websocket, user_id, tenant_id, display_name, notebook_id)
 
     try:
         # Send initial state
-        await websocket.send_json({
-            "type": "connected",
-            "connection_id": conn_id,
-            "active_users": collab_hub._get_notebook_presence(notebook_id),
-            "recent_activity": collab_hub._get_activity_feed(notebook_id),
-        })
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "connection_id": conn_id,
+                "active_users": collab_hub._get_notebook_presence(notebook_id),
+                "recent_activity": collab_hub._get_activity_feed(notebook_id),
+            }
+        )
 
         while True:
             raw = await websocket.receive_text()
@@ -611,10 +663,13 @@ async def websocket_collab(
         try:
             await websocket.close(code=1011, reason="Internal error")
         except Exception:
-            pass
+            logger.warning(
+                "Collab WebSocket close failed after error (connection may already be closed)",
+                exc_info=True,
+            )
 
 
 @router.get("/ws/collab/status")
-async def collab_status():
+async def collab_status() -> dict[str, Any]:
     """Get collaboration hub statistics."""
     return collab_hub.stats

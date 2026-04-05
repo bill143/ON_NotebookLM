@@ -132,6 +132,21 @@ export interface AppSettings {
   api_keys: Record<string, string>;
 }
 
+export interface PodcastPresetCatalog {
+  default: {
+    format: string;
+    length: string;
+    language: string;
+    speaker_profile: string;
+    speech_rate: number;
+  };
+  formats: string[];
+  lengths: string[];
+  speaker_profiles: string[];
+  languages_hint: string[];
+  speech_rate_range: { min: number; max: number };
+}
+
 // ── API Client ───────────────────────────────────────────────
 
 class NexusClient {
@@ -219,12 +234,20 @@ class NexusClient {
   async searchSources(
     query: string,
     searchType: "text" | "vector" | "hybrid" = "hybrid",
-    limit: number = 10
+    limit: number = 10,
+    options?: {
+      searchProfile?: "fast" | "balanced" | "deep";
+      fusionK?: number;
+      minScore?: number;
+    }
   ): Promise<Source[]> {
     return this.request("POST", "/api/v1/sources/search", {
       query,
       search_type: searchType,
       limit,
+      search_profile: options?.searchProfile ?? "balanced",
+      fusion_k: options?.fusionK ?? 60,
+      min_score: options?.minScore ?? 0.5,
     });
   }
 
@@ -253,6 +276,10 @@ class NexusClient {
 
   async cancelArtifact(id: string): Promise<Artifact> {
     return this.request("POST", `/api/v1/artifacts/${id}/cancel`);
+  }
+
+  async getPodcastPresets(): Promise<PodcastPresetCatalog> {
+    return this.request("GET", "/api/v1/artifacts/podcast/presets");
   }
 
   // ── Chat ─────────────────────────────────────────
@@ -298,6 +325,8 @@ class NexusClient {
     query: string;
     session_id?: string;
     notebook_id?: string;
+    profile?: "auto" | "quick" | "standard" | "deep";
+    max_follow_ups?: number;
   }): Promise<ResearchResult> {
     return this.request("POST", "/api/v1/research", data);
   }
@@ -367,21 +396,120 @@ class NexusClient {
   }
 
   // ── WebSocket ────────────────────────────────────
-  createChatSocket(sessionId?: string): WebSocket {
+  createChatSocket(
+    sessionId?: string,
+    onMessage?: (data: unknown) => void,
+    onOpen?: () => void,
+  ): ReconnectingSocket {
     const params = new URLSearchParams({
       token: this.token,
       ...(sessionId ? { session_id: sessionId } : {}),
     });
-    return new WebSocket(`${WS_BASE}/api/v1/ws/chat?${params}`);
+    return createReconnectingWebSocket(
+      `${WS_BASE}/api/v1/ws/chat?${params}`,
+      onMessage ?? (() => {}),
+      onOpen,
+    );
   }
 
-  createCollabSocket(notebookId: string): WebSocket {
+  createCollabSocket(
+    notebookId: string,
+    onMessage?: (data: unknown) => void,
+    onOpen?: () => void,
+  ): ReconnectingSocket {
     const params = new URLSearchParams({
       token: this.token,
       notebook_id: notebookId,
     });
-    return new WebSocket(`${WS_BASE}/api/v1/ws/collab?${params}`);
+    return createReconnectingWebSocket(
+      `${WS_BASE}/api/v1/ws/collab?${params}`,
+      onMessage ?? (() => {}),
+      onOpen,
+    );
   }
 }
 
 export const api = new NexusClient();
+
+// ── Reconnecting WebSocket ──────────────────────────────────
+
+export interface ReconnectingSocket {
+  send: (data: string) => void;
+  close: () => void;
+}
+
+export function createReconnectingWebSocket(
+  url: string,
+  onMessage: (data: unknown) => void,
+  onOpen?: () => void,
+  options: {
+    initialDelay?: number;
+    maxDelay?: number;
+    jitter?: number;
+    maxRetries?: number;
+  } = {},
+): ReconnectingSocket {
+  const initialDelay = options.initialDelay ?? 1000;
+  const maxDelay = options.maxDelay ?? 30000;
+  const jitter = options.jitter ?? 0.5;
+  const maxRetries = options.maxRetries ?? Infinity;
+
+  let ws: WebSocket | null = null;
+  let stopped = false;
+  let attempt = 0;
+  let delay = initialDelay;
+  let queue: string[] = [];
+
+  function connect() {
+    if (stopped) return;
+    attempt++;
+
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      delay = initialDelay;
+      attempt = 0;
+      for (const msg of queue) ws?.send(msg);
+      queue = [];
+      onOpen?.();
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        onMessage(JSON.parse(event.data));
+      } catch {
+        onMessage(event.data);
+      }
+    };
+
+    ws.onclose = () => {
+      if (stopped) return;
+      if (attempt >= maxRetries) return;
+      const jittered = delay * (1 + (Math.random() - 0.5) * jitter);
+      const wait = Math.min(jittered, maxDelay);
+      console.log(`[ws] reconnecting in ${Math.round(wait)}ms (attempt ${attempt})`);
+      setTimeout(connect, wait);
+      delay = Math.min(delay * 2, maxDelay);
+    };
+
+    ws.onerror = () => {
+      ws?.close();
+    };
+  }
+
+  connect();
+
+  return {
+    send(data: string) {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      } else {
+        queue.push(data);
+      }
+    },
+    close() {
+      stopped = true;
+      ws?.close();
+    },
+  };
+}

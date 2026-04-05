@@ -12,8 +12,12 @@ Handles long-running AI tasks outside the request cycle:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Any
+import importlib.util
+from collections.abc import Coroutine
+from datetime import UTC, datetime
+from typing import Any, TypeVar
+
+T = TypeVar("T")
 
 from celery import Celery, signals
 from loguru import logger
@@ -37,7 +41,7 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=600,       # 10 min hard limit
+    task_time_limit=600,  # 10 min hard limit
     task_soft_time_limit=540,  # 9 min soft limit
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=100,
@@ -56,10 +60,12 @@ celery_app.conf.update(
 
 # ── Lifecycle Hooks ──────────────────────────────────────────
 
+
 @signals.worker_init.connect
 def on_worker_init(**kwargs: Any) -> None:
     """Initialize database and logging when worker starts."""
     from src.infra.nexus_obs_tracing import setup_logging
+
     setup_logging(settings.log_level.value, settings.log_format)
     logger.info("Celery worker starting — initializing database")
 
@@ -67,6 +73,7 @@ def on_worker_init(**kwargs: Any) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     from src.infra.nexus_data_persist import init_database
+
     loop.run_until_complete(init_database())
     logger.info("Celery worker ready")
 
@@ -76,13 +83,15 @@ def on_worker_shutdown(**kwargs: Any) -> None:
     """Clean up database connections on worker shutdown."""
     loop = asyncio.get_event_loop()
     from src.infra.nexus_data_persist import close_database
+
     loop.run_until_complete(close_database())
     logger.info("Celery worker shutdown complete")
 
 
 # ── Helper ───────────────────────────────────────────────────
 
-def run_async(coro):
+
+def run_async(coro: Coroutine[Any, Any, T]) -> T:
     """Run an async function from a sync Celery task."""
     loop = asyncio.get_event_loop()
     if loop.is_closed():
@@ -92,6 +101,7 @@ def run_async(coro):
 
 
 # ── Tasks ────────────────────────────────────────────────────
+
 
 @celery_app.task(
     name="nexus.tasks.process_source",
@@ -112,9 +122,9 @@ def process_source(self, source_id: str, tenant_id: str) -> dict:
     logger.info(f"Processing source: {source_id}", task_id=self.request.id)
 
     async def _process():
-        from src.core.nexus_source_ingest import source_processor
         from src.agents.nexus_agent_embed import vectorize_source
         from src.agents.nexus_agent_orchestrator import ChainState
+        from src.core.nexus_source_ingest import source_processor
 
         # Step 1: Extract and process source content
         result = await source_processor.process_source(source_id, tenant_id)
@@ -155,14 +165,23 @@ def generate_artifact(self, artifact_id: str, tenant_id: str) -> dict:
     logger.info(f"Generating artifact: {artifact_id}", task_id=self.request.id)
 
     async def _generate():
-        from src.infra.nexus_data_persist import artifacts_repo, notebooks_repo, sources_repo, get_session
-        from src.agents.nexus_agent_orchestrator import ChainState, ChainStep, CompensationStrategy, chain_executor, AgentRegistry
+        from sqlalchemy import text
+
         from src.agents.nexus_agent_content import (
-            generate_summary, generate_quiz, generate_podcast_script, generate_flashcards,
+            generate_flashcards,
+            generate_podcast_script,
+            generate_quiz,
+            generate_summary,
+        )
+        from src.agents.nexus_agent_orchestrator import (
+            ChainState,
         )
         from src.agents.nexus_agent_voice import synthesize_dialogue
+        from src.infra.nexus_data_persist import (
+            artifacts_repo,
+            get_session,
+        )
         from src.infra.nexus_obs_tracing import metrics
-        from sqlalchemy import text
 
         # 1. Get artifact record
         artifact = await artifacts_repo.get_by_id(artifact_id, tenant_id)
@@ -189,9 +208,7 @@ def generate_artifact(self, artifact_id: str, tenant_id: str) -> dict:
                         {"nid": notebook_id},
                     )
                     rows = result.mappings().all()
-                    source_content = "\n\n---\n\n".join(
-                        row["full_text"][:20000] for row in rows
-                    )
+                    source_content = "\n\n---\n\n".join(row["full_text"][:20000] for row in rows)
 
             if not source_content:
                 await artifacts_repo.update(
@@ -225,15 +242,18 @@ def generate_artifact(self, artifact_id: str, tenant_id: str) -> dict:
             elif artifact_type == "quiz":
                 result_data = await generate_quiz(state)
                 import json
+
                 result_content = json.dumps(result_data.get("quiz", {}), indent=2)
 
             elif artifact_type == "flashcard":
                 result_data = await generate_flashcards(state)
                 import json
+
                 result_content = json.dumps(result_data.get("flashcards", []), indent=2)
 
                 # Save flashcards to flashcards table
                 from src.infra.nexus_data_persist import flashcards_repo
+
                 for card in result_data.get("flashcards", []):
                     await flashcards_repo.create(
                         data={
@@ -247,19 +267,42 @@ def generate_artifact(self, artifact_id: str, tenant_id: str) -> dict:
                     )
 
             elif artifact_type in ("audio", "podcast"):
-                # Step 1: Generate script
                 script_data = await generate_podcast_script(state)
                 state.outputs["script_generator"] = script_data
 
-                # Step 2: Synthesize audio
                 audio_data = await synthesize_dialogue(state)
 
-                # Save audio file
                 import os
-                storage_path = f"storage/artifacts/{tenant_id}/{artifact_id}.mp3"
-                os.makedirs(os.path.dirname(storage_path), exist_ok=True)
-                with open(storage_path, "wb") as f:
-                    f.write(audio_data.get("audio_data", b""))
+
+                from src.config import get_settings as _get_settings
+
+                _s = _get_settings()
+                rel_path = f"artifacts/{tenant_id}/{artifact_id}.mp3"
+
+                if _s.storage_backend.value == "s3" and _s.s3_bucket:
+                    if importlib.util.find_spec("boto3") is None:
+                        raise RuntimeError(
+                            "S3 storage is configured (STORAGE_BACKEND=s3 and S3_BUCKET set) but "
+                            "the optional `boto3` package is not installed. Install project "
+                            "dependencies from pyproject.toml (includes boto3) or set "
+                            "STORAGE_BACKEND=local."
+                        )
+                    import boto3
+
+                    s3 = boto3.client("s3", region_name=_s.s3_region)
+                    s3.put_object(
+                        Bucket=_s.s3_bucket,
+                        Key=rel_path,
+                        Body=audio_data.get("audio_data", b""),
+                        ContentType="audio/mpeg",
+                    )
+                    storage_path = f"s3://{_s.s3_bucket}/{rel_path}"
+                else:
+                    local_path = os.path.join(_s.storage_local_path, rel_path)
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    with open(local_path, "wb") as f:
+                        f.write(audio_data.get("audio_data", b""))
+                    storage_path = local_path
 
                 result_content = script_data.get("script", "")
                 result_data = {
@@ -280,7 +323,7 @@ def generate_artifact(self, artifact_id: str, tenant_id: str) -> dict:
             update_data = {
                 "status": "completed",
                 "content": result_content,
-                "completed_at": datetime.now(timezone.utc),
+                "completed_at": datetime.now(UTC),
             }
             if result_data.get("storage_url"):
                 update_data["storage_url"] = result_data["storage_url"]
@@ -352,10 +395,11 @@ def generate_flashcards_scheduled(notebook_id: str, tenant_id: str, user_id: str
     """Scheduled flashcard generation from new sources."""
 
     async def _gen():
+        from sqlalchemy import text
+
         from src.agents.nexus_agent_content import generate_flashcards
         from src.agents.nexus_agent_orchestrator import ChainState
         from src.infra.nexus_data_persist import get_session
-        from sqlalchemy import text
 
         # Get source content
         async with get_session(tenant_id) as session:
@@ -395,4 +439,4 @@ celery_app.conf.beat_schedule = {
 @celery_app.task(name="nexus.tasks.health_check")
 def health_check() -> dict:
     """Worker health check heartbeat."""
-    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}

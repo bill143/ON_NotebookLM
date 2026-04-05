@@ -8,25 +8,20 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import (
-    auth_headers,
-    admin_headers,
+    TEST_NOTEBOOK_ID,
     make_artifact_data,
     make_chat_data,
     make_model_data,
 )
 
-
 # ── Artifacts Tests ──────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 class TestArtifactsAPI:
-
     async def test_create_artifact(self, client: AsyncClient, user_headers: dict):
         """POST /api/v1/artifacts — queues artifact generation."""
-        data = make_artifact_data(
-            notebook_id="test-notebook-id",
-            artifact_type="summary",
-        )
+        data = make_artifact_data(artifact_type="summary")
 
         response = await client.post(
             "/api/v1/artifacts",
@@ -62,7 +57,7 @@ class TestArtifactsAPI:
         """POST /api/v1/artifacts/:id/cancel — cancels generation."""
         create_resp = await client.post(
             "/api/v1/artifacts",
-            json=make_artifact_data(notebook_id="nb-1", artifact_type="quiz"),
+            json=make_artifact_data(artifact_type="quiz"),
             headers=user_headers,
         )
         artifact_id = create_resp.json()["id"]
@@ -87,12 +82,72 @@ class TestArtifactsAPI:
         assert "queued" in body
         assert "processing" in body
 
+    async def test_create_podcast_artifact_with_presets(
+        self, client: AsyncClient, user_headers: dict
+    ):
+        """POST /api/v1/artifacts — accepts validated podcast preset config."""
+        response = await client.post(
+            "/api/v1/artifacts",
+            json={
+                "notebook_id": TEST_NOTEBOOK_ID,
+                "title": "Podcast with Presets",
+                "artifact_type": "podcast",
+                "generation_config": {
+                    "format": "deep_dive",
+                    "length": "long",
+                    "language": "English",
+                    "speaker_profile": "interviewer_guest",
+                    "speech_rate": 1.1,
+                },
+            },
+            headers=user_headers,
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["artifact_type"] == "podcast"
+
+    async def test_create_podcast_artifact_rejects_invalid_presets(
+        self, client: AsyncClient, user_headers: dict
+    ):
+        """POST /api/v1/artifacts — rejects invalid podcast preset values."""
+        response = await client.post(
+            "/api/v1/artifacts",
+            json={
+                "notebook_id": TEST_NOTEBOOK_ID,
+                "title": "Podcast Invalid",
+                "artifact_type": "podcast",
+                "generation_config": {
+                    "format": "unsupported",
+                    "length": "very_long",
+                    "speaker_profile": "unknown",
+                    "speech_rate": 2.0,
+                },
+            },
+            headers=user_headers,
+        )
+
+        assert response.status_code == 422
+
+    async def test_get_podcast_preset_catalog(self, client: AsyncClient, user_headers: dict):
+        """GET /api/v1/artifacts/podcast/presets — returns preset metadata."""
+        response = await client.get(
+            "/api/v1/artifacts/podcast/presets",
+            headers=user_headers,
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "default" in body
+        assert "formats" in body
+        assert "speaker_profiles" in body
+
 
 # ── Chat Tests ───────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestChatAPI:
-
     async def test_send_message(self, client: AsyncClient, user_headers: dict):
         """POST /api/v1/chat — sends chat message."""
         data = make_chat_data(content="Explain machine learning in simple terms")
@@ -132,7 +187,7 @@ class TestChatAPI:
     async def test_get_session_messages(self, client: AsyncClient, user_headers: dict):
         """GET /api/v1/chat/sessions/:id/messages — returns 200."""
         response = await client.get(
-            "/api/v1/chat/sessions/some-session-id/messages",
+            "/api/v1/chat/sessions/00000000-0000-0000-0000-000000000099/messages",
             headers=user_headers,
         )
 
@@ -141,9 +196,9 @@ class TestChatAPI:
 
 # ── Models Tests ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestModelsAPI:
-
     async def test_list_models(self, client: AsyncClient, user_headers: dict):
         """GET /api/v1/models — lists registered models."""
         response = await client.get(
@@ -211,9 +266,9 @@ class TestModelsAPI:
 
 # ── Health Tests ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestHealthAPI:
-
     async def test_liveness(self, client: AsyncClient):
         """GET /health/live — returns alive status."""
         response = await client.get("/health/live")

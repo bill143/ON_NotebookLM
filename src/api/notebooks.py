@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from src.infra.nexus_vault_keys import AuthContext, get_current_user
-from src.infra.nexus_obs_tracing import traced
 from src.exceptions import NotFoundError
+from src.infra.nexus_obs_tracing import traced
+from src.infra.nexus_vault_keys import AuthContext, get_current_user
 
 router = APIRouter(prefix="/notebooks", tags=["Notebooks"])
 
 
 # ── Schemas ──────────────────────────────────────────────────
+
 
 class NotebookCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=500)
@@ -25,13 +26,13 @@ class NotebookCreate(BaseModel):
 
 
 class NotebookUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    icon: Optional[str] = None
-    color: Optional[str] = None
-    archived: Optional[bool] = None
-    pinned: Optional[bool] = None
-    tags: Optional[list[str]] = None
+    name: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    archived: bool | None = None
+    pinned: bool | None = None
+    tags: list[str] | None = None
 
 
 class NotebookResponse(BaseModel):
@@ -52,14 +53,15 @@ class SourceLink(BaseModel):
 
 # ── Endpoints ────────────────────────────────────────────────
 
+
 @router.post("", response_model=NotebookResponse, status_code=201)
 @traced("notebooks.create")
 async def create_notebook(
     data: NotebookCreate,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Create a new notebook."""
-    from src.infra.nexus_data_persist import notebooks_repo, audit_repo
+    from src.infra.nexus_data_persist import audit_repo, notebooks_repo
 
     result = await notebooks_repo.create(
         data={
@@ -69,13 +71,15 @@ async def create_notebook(
         tenant_id=auth.tenant_id,
     )
 
-    await audit_repo.create(data={
-        "tenant_id": auth.tenant_id,
-        "user_id": auth.user_id,
-        "action": "notebook.create",
-        "resource_type": "notebook",
-        "resource_id": result["id"],
-    })
+    await audit_repo.create(
+        data={
+            "tenant_id": auth.tenant_id,
+            "user_id": auth.user_id,
+            "action": "notebook.create",
+            "resource_type": "notebook",
+            "resource_id": result["id"],
+        }
+    )
 
     return {**result, "source_count": 0}
 
@@ -87,7 +91,7 @@ async def list_notebooks(
     archived: bool = False,
     limit: int = Query(50, le=100),
     offset: int = 0,
-):
+) -> list[dict[str, Any]]:
     """List notebooks for the current user."""
     from src.infra.nexus_data_persist import notebooks_repo
 
@@ -104,7 +108,7 @@ async def list_notebooks(
 async def get_notebook(
     notebook_id: str,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Get a notebook with its sources."""
     from src.infra.nexus_data_persist import notebooks_repo
 
@@ -120,7 +124,7 @@ async def update_notebook(
     notebook_id: str,
     data: NotebookUpdate,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Update a notebook."""
     from src.infra.nexus_data_persist import notebooks_repo
 
@@ -139,7 +143,7 @@ async def update_notebook(
 async def delete_notebook(
     notebook_id: str,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> None:
     """Soft-delete a notebook."""
     from src.infra.nexus_data_persist import notebooks_repo
 
@@ -153,7 +157,7 @@ async def delete_notebook(
 async def delete_preview(
     notebook_id: str,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Preview cascade delete counts (Repo #7 pattern)."""
     from src.infra.nexus_data_persist import notebooks_repo
 
@@ -167,10 +171,11 @@ async def add_source_to_notebook(
     notebook_id: str,
     link: SourceLink,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Link a source to a notebook."""
-    from src.infra.nexus_data_persist import get_session
     from sqlalchemy import text
+
+    from src.infra.nexus_data_persist import get_session
 
     async with get_session(auth.tenant_id) as session:
         await session.execute(
@@ -191,10 +196,11 @@ async def remove_source_from_notebook(
     notebook_id: str,
     source_id: str,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> None:
     """Unlink a source from a notebook."""
-    from src.infra.nexus_data_persist import get_session
     from sqlalchemy import text
+
+    from src.infra.nexus_data_persist import get_session
 
     async with get_session(auth.tenant_id) as session:
         await session.execute(

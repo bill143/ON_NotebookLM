@@ -4,25 +4,20 @@ Unit Tests — Error Taxonomy & Exception Classification
 
 from __future__ import annotations
 
-import pytest
-
 from src.exceptions import (
-    NexusError,
-    AuthError,
-    ForbiddenError,
-    ValidationError,
-    NotFoundError,
     AIProviderError,
-    RateLimitError,
+    AuthError,
+    ChainExecutionError,
+    ErrorSeverity,
+    GenerationError,
+    NexusError,
+    PromptInjectionDetected,
     ProviderAuthError,
     ProviderTimeoutError,
-    TokenBudgetExceeded,
-    SourceProcessingError,
-    ChainExecutionError,
-    PromptInjectionDetected,
+    RateLimitError,
     TenantIsolationError,
+    TokenBudgetExceeded,
     classify_error,
-    ErrorSeverity,
 )
 
 
@@ -104,3 +99,13 @@ class TestErrorClassifier:
         cls, msg = classify_error(Exception("something random"))
         assert cls == NexusError
         assert "unexpected" in msg.lower()
+
+    def test_content_filter_detection(self):
+        cls, msg = classify_error(Exception("blocked by content filter"))
+        assert cls == GenerationError
+        assert "filtered" in msg.lower()
+
+    def test_token_limit_detection(self):
+        cls, msg = classify_error(Exception("context length exceeded — too long"))
+        assert cls == GenerationError
+        assert "context" in msg.lower()

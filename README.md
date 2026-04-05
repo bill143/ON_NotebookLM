@@ -256,7 +256,7 @@ NEXUS NOTEBOOK LM MAIN/
 | **TTS** | OpenAI TTS, ElevenLabs, Kokoro (local) |
 | **Export** | ReportLab (PDF), python-docx, ebooklib (EPUB) |
 | **Video/Slides** | MoviePy, python-pptx |
-| **Auth** | JWT, AES-256-GCM, tenant RLS |
+| **Auth** | JWT (HS256), AES-256-GCM with Argon2id KDF, tenant RLS |
 | **Observability** | Loguru, Prometheus, Grafana, Sentry |
 | **CI/CD** | GitHub Actions (lint, test, build, scan) |
 | **Deploy** | Docker (multi-stage), Docker Compose |
