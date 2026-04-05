@@ -1,13 +1,11 @@
 """
 Nexus Brain Knowledge — Feature 5: Persistent Brain & Learning System
 Source: Repo #7 (notes, insights, vector search), ORIGINAL ENGINEERING (FSRS)
-
 Provides:
 - Notebook-scoped knowledge base with dual search
 - FSRS-4.5 spaced repetition algorithm
 - Auto-flashcard generation from sources
 """
-
 from __future__ import annotations
 
 import math
@@ -17,7 +15,7 @@ from typing import Any
 
 from src.infra.nexus_obs_tracing import traced
 
-# ── FSRS-4.5 Spaced Repetition Algorithm ────────────────────
+# ── FSRS-4.5 Spaced Repetition Algorithm ──────────────────────
 # Original engineering — no repo has this
 
 # FSRS-4.5 parameters (optimal defaults from research)
@@ -51,9 +49,9 @@ FSRS_PARAMS = {
 class ReviewState:
     """State of a flashcard review schedule."""
 
-    difficulty: float  # D ∈ [1, 10]
+    difficulty: float  # D in [1, 10]
     stability: float  # S > 0 (days)
-    retrievability: float  # R ∈ [0, 1]
+    retrievability: float  # R in [0, 1]
     state: int  # 0=new, 1=learning, 2=review, 3=relearning
     review_count: int = 0
     lapses: int = 0
@@ -63,6 +61,7 @@ class ReviewState:
 class FSRSScheduler:
     """
     FSRS-4.5 scheduling algorithm implementation.
+
     Calculates optimal review intervals based on memory model.
     """
 
@@ -135,9 +134,18 @@ class FSRSScheduler:
             stability = self.init_stability(rating)
             state = 1 if rating < 3 else 2
         else:
-            elapsed = 0.0
+            # Use the scheduled interval as the baseline elapsed time.
+            # This ensures that when a card is reviewed exactly on time
+            # (elapsed ~ 0), the retrievability reflects the target retention
+            # rather than a perfect recall of 1.0 which would zero out the
+            # stability-increase term.
+            scheduled_interval = self.next_interval(current_state.stability)
             if current_state.due_at:
-                elapsed = max(0, (now - current_state.due_at).total_seconds() / 86400)
+                actual_elapsed = (now - current_state.due_at).total_seconds() / 86400
+                # elapsed = scheduled interval + any overdue time (min 0)
+                elapsed = scheduled_interval + max(0.0, actual_elapsed)
+            else:
+                elapsed = scheduled_interval
 
             r = self.retrievability(current_state.stability, elapsed)
             difficulty = self.next_difficulty(current_state.difficulty, rating)
@@ -158,8 +166,7 @@ class FSRSScheduler:
         )
 
 
-# ── Knowledge Base Service ───────────────────────────────────
-
+# ── Knowledge Base Service ─────────────────────────────────────
 
 class KnowledgeBase:
     """Notebook-scoped knowledge management."""
@@ -182,18 +189,18 @@ class KnowledgeBase:
 
         query = """
             SELECT f.id, f.front, f.back, f.tags,
-                   rr.difficulty, rr.stability, rr.due_at, rr.review_count, rr.lapses, rr.state
+                   rr.difficulty, rr.stability, rr.due_at,
+                   rr.review_count, rr.lapses, rr.state
             FROM flashcards f
-            LEFT JOIN review_records rr ON f.id = rr.flashcard_id AND rr.user_id = :user_id
+            LEFT JOIN review_records rr
+                ON f.id = rr.flashcard_id AND rr.user_id = :user_id
             WHERE f.tenant_id = :tenant_id
               AND (rr.due_at IS NULL OR rr.due_at <= NOW())
         """
         params: dict[str, Any] = {"user_id": user_id, "tenant_id": tenant_id}
-
         if notebook_id:
             query += " AND f.notebook_id = :notebook_id"
             params["notebook_id"] = notebook_id
-
         query += " ORDER BY rr.due_at ASC NULLS FIRST LIMIT :limit"
         params["limit"] = limit
 
@@ -248,8 +255,11 @@ class KnowledgeBase:
             await session.execute(
                 text("""
                     INSERT INTO review_records
-                    (id, flashcard_id, user_id, difficulty, stability, retrievability, due_at, review_count, lapses, rating, state)
-                    VALUES (uuid_generate_v4(), :fid, :uid, :d, :s, :r, :due, :rc, :l, :rating, :state)
+                        (id, flashcard_id, user_id, difficulty, stability,
+                         retrievability, due_at, review_count, lapses, rating, state)
+                    VALUES
+                        (uuid_generate_v4(), :fid, :uid, :d, :s, :r,
+                         :due, :rc, :l, :rating, :state)
                 """),
                 {
                     "fid": flashcard_id,

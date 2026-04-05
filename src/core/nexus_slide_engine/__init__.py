@@ -224,7 +224,7 @@ class SlideEngine:
                     )
             else:
                 # No heading — treat as content slide
-                lines = [ln.strip() for ln in section.split("\n") if ln.strip()]
+                lines = [line.strip() for line in section.split("\n") if line.strip()]
                 if lines:
                     slides.append(
                         SlideContent(

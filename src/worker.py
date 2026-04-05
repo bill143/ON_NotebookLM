@@ -34,6 +34,9 @@ celery_app = Celery(
     backend=settings.redis_url,
 )
 
+# Alias for `-A src.worker` celery CLI invocation
+celery = celery_app
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],

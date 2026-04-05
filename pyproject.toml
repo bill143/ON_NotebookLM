@@ -85,6 +85,7 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "integration: Integration tests requiring database/services",
     "unit: Unit tests with no external dependencies",

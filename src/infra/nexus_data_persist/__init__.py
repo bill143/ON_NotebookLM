@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import MetaData, text, select, update as sa_update, delete, func, and_
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,

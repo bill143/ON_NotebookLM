@@ -102,13 +102,17 @@ class ContentExtractor:
 
             # Extract video ID from URL
             parsed = urlparse(url)
+            hostname = parsed.hostname or ""
             video_id = ""
-            host = parsed.hostname or ""
-            if "youtube.com" in host:
+            if (
+                hostname == "youtube.com"
+                or hostname.endswith(".youtube.com")
+                or hostname == "www.youtube.com"
+            ):
                 from urllib.parse import parse_qs
 
                 video_id = parse_qs(parsed.query).get("v", [""])[0]
-            elif "youtu.be" in host:
+            elif hostname == "youtu.be" or hostname.endswith(".youtu.be"):
                 video_id = parsed.path.strip("/")
 
             if not video_id:
