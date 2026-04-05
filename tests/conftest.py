@@ -86,6 +86,8 @@ def admin_headers() -> dict:
 @pytest_asyncio.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP test client for FastAPI."""
+    from src.infra.nexus_data_persist import init_database
+    await init_database()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
