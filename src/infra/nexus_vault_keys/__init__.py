@@ -23,6 +23,7 @@ from loguru import logger
 
 from src.config import get_settings
 from src.exceptions import AuthError, ForbiddenError, RateLimitError, TenantIsolationError
+from fastapi import Header
 
 
 # ── Credential Encryption (AES-256-GCM) ─────────────────────
@@ -213,7 +214,7 @@ rate_limiter = RateLimiter()
 
 # ── FastAPI Dependency ───────────────────────────────────────
 
-async def get_current_user(authorization: str = "") -> AuthContext:
+async def get_current_user(authorization: str = Header("")) -> AuthContext:
     """FastAPI dependency for extracting authenticated user."""
     if not authorization:
         raise AuthError("No authorization header")
