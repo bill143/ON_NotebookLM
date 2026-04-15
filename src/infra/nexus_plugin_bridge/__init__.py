@@ -113,8 +113,27 @@ class PluginManager:
         self._handlers: dict[str, dict[str, Callable]] = {}
         self.event_bus = EventBus()
 
-    async def install(self, manifest: PluginManifest) -> None:
-        """Install a plugin from its manifest."""
+    async def install(
+        self,
+        manifest: PluginManifest | None = None,
+        *,
+        tenant_id: str = "",
+        name: str = "",
+        version: str = "latest",
+        permissions: list[str] | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Install a plugin from its manifest or keyword args."""
+        if manifest is None:
+            manifest = PluginManifest(
+                name=name,
+                version=version,
+                description=f"Plugin: {name}",
+                author="user",
+                permissions=[PluginPermission(p) for p in (permissions or [])
+                             if p in [e.value for e in PluginPermission]],
+                config_schema=config or {},
+            )
         if manifest.name in self._plugins:
             raise PluginError(f"Plugin '{manifest.name}' already installed")
 
@@ -143,15 +162,29 @@ class PluginManager:
 
         logger.info(f"Installed plugin: {manifest.name} v{manifest.version}")
 
-    async def uninstall(self, plugin_name: str) -> None:
-        """Uninstall a plugin."""
-        if plugin_name not in self._plugins:
-            raise PluginError(f"Plugin '{plugin_name}' not installed")
+        from datetime import UTC, datetime
 
-        self.event_bus.unsubscribe(plugin_name)
-        del self._plugins[plugin_name]
-        del self._handlers[plugin_name]
-        logger.info(f"Uninstalled plugin: {plugin_name}")
+        return {
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "author": manifest.author,
+            "enabled": True,
+            "permissions": [p.value for p in manifest.permissions],
+            "installed_at": datetime.now(UTC).isoformat(),
+        }
+
+    async def uninstall(self, plugin_name: str = "", *, tenant_id: str = "", name: str = "") -> None:
+        """Uninstall a plugin."""
+        target = name or plugin_name
+        if target not in self._plugins:
+            raise PluginError(f"Plugin '{target}' not installed")
+
+        self.event_bus.unsubscribe(target)
+        del self._plugins[target]
+        if target in self._handlers:
+            del self._handlers[target]
+        logger.info(f"Uninstalled plugin: {target}")
 
     def register_handler(self, plugin_name: str, action: str, handler: Callable) -> None:
         """Register an action handler for a plugin."""
@@ -177,17 +210,62 @@ class PluginManager:
         except Exception as e:
             raise PluginError(f"Plugin execution failed: {e}", original_error=e) from e
 
-    def list_plugins(self) -> list[dict[str, Any]]:
+    def list_plugins(self, tenant_id: str | None = None) -> list[dict[str, Any]]:
         """List all installed plugins."""
+        from datetime import UTC, datetime
+
         return [
             {
                 "name": m.name,
                 "version": m.version,
                 "description": m.description,
+                "author": m.author,
+                "enabled": True,
                 "permissions": [p.value for p in m.permissions],
+                "installed_at": datetime.now(UTC).isoformat(),
             }
             for m in self._plugins.values()
         ]
+
+    async def toggle(
+        self, tenant_id: str, name: str, enabled: bool
+    ) -> dict[str, Any]:
+        """Enable or disable a plugin."""
+        if name not in self._plugins:
+            raise PluginError(f"Plugin '{name}' not found")
+
+        manifest = self._plugins[name]
+        logger.info(f"Plugin '{name}' {'enabled' if enabled else 'disabled'}")
+
+        from datetime import UTC, datetime
+
+        return {
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "author": manifest.author,
+            "enabled": enabled,
+            "permissions": [p.value for p in manifest.permissions],
+            "installed_at": datetime.now(UTC).isoformat(),
+        }
+
+    def get_plugin(self, tenant_id: str, name: str) -> dict[str, Any]:
+        """Get plugin details."""
+        if name not in self._plugins:
+            raise PluginError(f"Plugin '{name}' not found")
+
+        manifest = self._plugins[name]
+        from datetime import UTC, datetime
+
+        return {
+            "name": manifest.name,
+            "version": manifest.version,
+            "description": manifest.description,
+            "author": manifest.author,
+            "enabled": True,
+            "permissions": [p.value for p in manifest.permissions],
+            "installed_at": datetime.now(UTC).isoformat(),
+        }
 
 
 # Global singleton
