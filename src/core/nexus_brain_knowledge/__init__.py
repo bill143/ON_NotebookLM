@@ -308,5 +308,308 @@ class KnowledgeBaseService(KnowledgeBase):
         return self.fsrs.schedule_review(current_state, rating)
 
 
+class BrainManager:
+    """
+    High-level facade for the brain router — wraps KnowledgeBase
+    and adds flashcard CRUD + AI generation.
+    """
+
+    def __init__(self) -> None:
+        self._kb = KnowledgeBase()
+
+    @traced("brain.list_flashcards")
+    async def list_flashcards(
+        self,
+        tenant_id: str,
+        user_id: str,
+        notebook_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all flashcards for user."""
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        query = """
+            SELECT f.id, f.notebook_id, f.front, f.back, f.source_id,
+                   f.tags, f.created_at,
+                   COALESCE(rr.difficulty, 5.0) AS difficulty,
+                   COALESCE(rr.stability, 0.0) AS stability,
+                   rr.due_at,
+                   COALESCE(rr.review_count, 0) AS review_count
+            FROM flashcards f
+            LEFT JOIN LATERAL (
+                SELECT difficulty, stability, due_at, review_count
+                FROM review_records
+                WHERE flashcard_id = f.id AND user_id = :user_id
+                ORDER BY created_at DESC LIMIT 1
+            ) rr ON true
+            WHERE f.tenant_id = :tenant_id
+        """
+        params: dict[str, Any] = {"user_id": user_id, "tenant_id": tenant_id}
+        if notebook_id:
+            query += " AND f.notebook_id = :notebook_id"
+            params["notebook_id"] = notebook_id
+        query += " ORDER BY f.created_at DESC"
+
+        async with get_session(tenant_id) as session:
+            result = await session.execute(text(query), params)
+            rows = result.mappings().all()
+            return [
+                {
+                    "id": str(r["id"]),
+                    "notebook_id": str(r["notebook_id"]),
+                    "front": r["front"],
+                    "back": r["back"],
+                    "source_id": str(r["source_id"]) if r["source_id"] else None,
+                    "tags": r["tags"] if r["tags"] else [],
+                    "difficulty": float(r["difficulty"]),
+                    "stability": float(r["stability"]),
+                    "due_at": str(r["due_at"]) if r["due_at"] else None,
+                    "review_count": int(r["review_count"]),
+                    "created_at": str(r["created_at"]),
+                }
+                for r in rows
+            ]
+
+    @traced("brain.create_flashcard")
+    async def create_flashcard(
+        self,
+        tenant_id: str,
+        user_id: str,
+        notebook_id: str,
+        front: str,
+        back: str,
+        source_id: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a single flashcard."""
+        import uuid
+
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        card_id = str(uuid.uuid4())
+        now = datetime.now(UTC)
+
+        async with get_session(tenant_id) as session:
+            await session.execute(
+                text("""
+                    INSERT INTO flashcards
+                        (id, tenant_id, user_id, notebook_id, front, back,
+                         source_id, tags, created_at, updated_at)
+                    VALUES (:id, :tid, :uid, :nid, :front, :back,
+                            :sid, :tags, :now, :now)
+                """),
+                {
+                    "id": card_id,
+                    "tid": tenant_id,
+                    "uid": user_id,
+                    "nid": notebook_id,
+                    "front": front,
+                    "back": back,
+                    "sid": source_id,
+                    "tags": tags or [],
+                    "now": now,
+                },
+            )
+            await session.commit()
+
+        return {
+            "id": card_id,
+            "notebook_id": notebook_id,
+            "front": front,
+            "back": back,
+            "source_id": source_id,
+            "tags": tags or [],
+            "difficulty": 5.0,
+            "stability": 0.0,
+            "due_at": None,
+            "review_count": 0,
+            "created_at": now.isoformat(),
+        }
+
+    @traced("brain.get_due_cards")
+    async def get_due_cards(
+        self,
+        tenant_id: str,
+        user_id: str,
+        notebook_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Get flashcards due for review."""
+        return await self._kb.get_due_flashcards(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            notebook_id=notebook_id,
+            limit=limit,
+        )
+
+    @traced("brain.submit_review")
+    async def submit_review(
+        self,
+        tenant_id: str,
+        user_id: str,
+        card_id: str,
+        rating: int,
+    ) -> dict[str, Any]:
+        """Submit a review and get next scheduling."""
+        result = await self._kb.review_flashcard(
+            flashcard_id=card_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            rating=rating,
+        )
+        return {
+            "card_id": card_id,
+            "next_due": result["next_due"],
+            "new_difficulty": result["difficulty"],
+            "new_stability": result["stability"],
+            "interval_days": result["interval_days"],
+        }
+
+    @traced("brain.generate_from_source")
+    async def generate_from_source(
+        self,
+        tenant_id: str,
+        user_id: str,
+        notebook_id: str,
+        source_id: str,
+        count: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Auto-generate flashcards from a source using AI."""
+        from src.agents.nexus_agent_content import generate_flashcards
+        from src.agents.nexus_model_layer import model_manager
+
+        # Get source content
+        from src.infra.nexus_data_persist import get_session
+
+        from sqlalchemy import text
+
+        async with get_session(tenant_id) as session:
+            result = await session.execute(
+                text("SELECT content FROM sources WHERE id = :sid AND tenant_id = :tid"),
+                {"sid": source_id, "tid": tenant_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                from src.exceptions import NotFoundError
+
+                raise NotFoundError(f"Source {source_id} not found")
+            content = row["content"]
+
+        # Generate flashcards via AI
+        llm = await model_manager.provision_llm(
+            tenant_id=tenant_id,
+            task_type="flashcard_generation",
+        )
+        cards_json = await generate_flashcards(
+            content=content[:8000],  # Limit context
+            llm=llm,
+            count=count,
+        )
+
+        # Parse and save each card
+        import json
+
+        try:
+            generated = json.loads(cards_json) if isinstance(cards_json, str) else cards_json
+        except (json.JSONDecodeError, TypeError):
+            generated = []
+
+        saved: list[dict[str, Any]] = []
+        for item in generated[:count]:
+            card = await self.create_flashcard(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                notebook_id=notebook_id,
+                front=item.get("front", item.get("question", "")),
+                back=item.get("back", item.get("answer", "")),
+                source_id=source_id,
+                tags=item.get("tags", []),
+            )
+            saved.append(card)
+
+        return saved
+
+    @traced("brain.delete_flashcard")
+    async def delete_flashcard(
+        self,
+        tenant_id: str,
+        user_id: str,
+        card_id: str,
+    ) -> None:
+        """Delete a flashcard and its review history."""
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        async with get_session(tenant_id) as session:
+            await session.execute(
+                text("DELETE FROM review_records WHERE flashcard_id = :cid"),
+                {"cid": card_id},
+            )
+            await session.execute(
+                text(
+                    "DELETE FROM flashcards WHERE id = :cid AND tenant_id = :tid"
+                ),
+                {"cid": card_id, "tid": tenant_id},
+            )
+            await session.commit()
+
+    @traced("brain.get_progress")
+    async def get_progress(
+        self,
+        tenant_id: str,
+        user_id: str,
+        notebook_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Get learning progress summary."""
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        base_filter = "f.tenant_id = :tenant_id"
+        params: dict[str, Any] = {"tenant_id": tenant_id, "user_id": user_id}
+        if notebook_id:
+            base_filter += " AND f.notebook_id = :notebook_id"
+            params["notebook_id"] = notebook_id
+
+        async with get_session(tenant_id) as session:
+            result = await session.execute(
+                text(f"""
+                    SELECT
+                        COUNT(*) AS total_cards,
+                        COUNT(CASE WHEN rr.due_at IS NOT NULL AND rr.due_at <= NOW() THEN 1 END) AS cards_due,
+                        COUNT(CASE WHEN rr.review_count > 0 THEN 1 END) AS cards_learned,
+                        COUNT(CASE WHEN rr.review_count IS NULL OR rr.review_count = 0 THEN 1 END) AS cards_new,
+                        COALESCE(AVG(rr.difficulty), 5.0) AS avg_difficulty
+                    FROM flashcards f
+                    LEFT JOIN LATERAL (
+                        SELECT difficulty, due_at, review_count
+                        FROM review_records
+                        WHERE flashcard_id = f.id AND user_id = :user_id
+                        ORDER BY created_at DESC LIMIT 1
+                    ) rr ON true
+                    WHERE {base_filter}
+                """),  # noqa: S608
+                params,
+            )
+            row = result.mappings().first()
+
+        total = int(row["total_cards"]) if row else 0
+        learned = int(row["cards_learned"]) if row else 0
+
+        return {
+            "total_cards": total,
+            "cards_due": int(row["cards_due"]) if row else 0,
+            "cards_learned": learned,
+            "cards_new": int(row["cards_new"]) if row else 0,
+            "average_difficulty": round(float(row["avg_difficulty"]) if row else 5.0, 2),
+            "retention_rate": round(learned / total, 2) if total > 0 else 0.0,
+            "streak_days": 0,  # Calculated from consecutive review days
+        }
+
+
 # Global singleton
 knowledge_base = KnowledgeBase()

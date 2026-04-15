@@ -225,14 +225,19 @@ async def prometheus_metrics() -> Response:
 
 # ── API Routes ───────────────────────────────────────────────
 
+from src.api.admin import router as admin_router
 from src.api.artifacts import router as artifacts_router
+from src.api.brain import router as brain_router
 from src.api.chat import router as chat_router
 from src.api.collaboration import router as collab_router
 from src.api.debate import router as debate_router
 from src.api.export import router as export_router
+from src.api.local import router as local_router
 from src.api.mindmap import router as mindmap_router
 from src.api.models import router as models_router
 from src.api.notebooks import router as notebooks_router
+from src.api.plugins import router as plugins_router
+from src.api.prompts import router as prompts_router
 from src.api.research import router as research_router
 from src.api.sources import router as sources_router
 from src.api.verification import router as verification_router
@@ -250,6 +255,11 @@ app.include_router(collab_router, prefix="/api/v1")
 app.include_router(verification_router, prefix="/api/v1")
 app.include_router(mindmap_router, prefix="/api/v1")
 app.include_router(debate_router, prefix="/api/v1")
+app.include_router(brain_router, prefix="/api/v1")
+app.include_router(plugins_router, prefix="/api/v1")
+app.include_router(local_router, prefix="/api/v1")
+app.include_router(prompts_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 
 
 @app.get("/api/v1", tags=["Root"])
