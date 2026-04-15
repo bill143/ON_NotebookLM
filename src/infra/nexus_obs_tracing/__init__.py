@@ -223,9 +223,9 @@ def traced(operation: str | None = None) -> Callable:
             finally:
                 span_id_var.set(parent_span)
 
-        import asyncio
+        import inspect
 
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 

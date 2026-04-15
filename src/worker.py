@@ -96,8 +96,12 @@ def on_worker_shutdown(**kwargs: Any) -> None:
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:
     """Run an async function from a sync Celery task."""
-    loop = asyncio.get_event_loop()
-    if loop.is_closed():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is None or loop.is_closed():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
