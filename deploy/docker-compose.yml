@@ -145,12 +145,16 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-nexus_dev_2024}
     entrypoint: >
       sh -c "
+      mkdir -p /backups;
       while true; do
         TIMESTAMP=$$(date +%Y%m%d_%H%M%S);
-        pg_dump -h postgres -U nexus -d nexus_notebook_11 -Fc -f /backups/nexus_$$TIMESTAMP.dump
-        && echo \"Backup complete: nexus_$$TIMESTAMP.dump\"
-        && find /backups -maxdepth 1 -name '*.dump' -mtime +7 -delete
-        && echo \"Old backups pruned\";
+        if pg_dump -h postgres -U nexus -d nexus_notebook_11 -Fc -f /backups/nexus_$$TIMESTAMP.dump; then
+          echo \"Backup complete: nexus_$$TIMESTAMP.dump\";
+          find /backups -maxdepth 1 -name '*.dump' -mtime +7 -delete;
+          echo \"Old backups pruned\";
+        else
+          echo \"Backup failed\";
+        fi;
         sleep 3600;
       done"
     volumes:
