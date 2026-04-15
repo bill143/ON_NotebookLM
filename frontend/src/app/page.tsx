@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { api, type PodcastPresetCatalog } from "@/lib/api";
+import { BrainPanel } from "@/components/BrainPanel";
 import { ResearchPanel } from "@/components/ResearchPanel";
 import { NotesPanel } from "@/components/NotesPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -252,6 +253,7 @@ function TabNav() {
     { id: "studio" as const, label: "Studio", icon: Sparkles },
     { id: "research" as const, label: "Research", icon: FlaskConical },
     { id: "notes" as const, label: "Notes", icon: Layers },
+    { id: "brain" as const, label: "Brain", icon: Brain },
   ];
 
   return (
@@ -628,6 +630,10 @@ function StudioPanel() {
     { type: "podcast", label: "Podcast", icon: Mic, desc: "Multi-speaker audio conversation" },
     { type: "quiz", label: "Quiz", icon: FileQuestion, desc: "Test your knowledge" },
     { type: "flashcard", label: "Flashcards", icon: Layers, desc: "Spaced repetition cards" },
+    { type: "slide_deck", label: "Slides", icon: Zap, desc: "PowerPoint slide deck (PPTX)" },
+    { type: "study_guide", label: "Study Guide", icon: BookOpen, desc: "Structured learning guide" },
+    { type: "timeline", label: "Timeline", icon: Globe, desc: "Chronological event timeline" },
+    { type: "briefing", label: "Briefing", icon: Download, desc: "Executive briefing document" },
   ];
 
   const handleCreate = async (
@@ -946,6 +952,7 @@ export default function Home() {
             {activeTab === "studio" && <StudioPanel />}
             {activeTab === "research" && <ResearchPanel />}
             {activeTab === "notes" && <NotesPanel />}
+            {activeTab === "brain" && <BrainPanel />}
             {activeTab === "settings" && <SettingsPanel />}
           </>
         ) : (

@@ -45,7 +45,7 @@ interface AppState {
 
   // UI
   sidebarOpen: boolean;
-  activeTab: "sources" | "chat" | "studio" | "notes" | "research" | "settings";
+  activeTab: "sources" | "chat" | "studio" | "notes" | "research" | "brain" | "settings";
   uploadingFile: boolean;
 
   // Actions
