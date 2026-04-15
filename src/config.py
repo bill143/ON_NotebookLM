@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = None
     edge_tts_enabled: bool = True
 
+    # ── Web Search (Feature 2A) ─────────────────────────────
+    tavily_api_key: str | None = None
+
     # ── Storage ──────────────────────────────────────────────
     storage_backend: StorageBackend = StorageBackend.LOCAL
     storage_local_path: str = "./storage"

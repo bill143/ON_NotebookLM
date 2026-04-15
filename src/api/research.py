@@ -139,3 +139,65 @@ async def get_research_session(
     if not result:
         raise NotFoundError(f"Research session '{session_id}' not found")
     return result
+
+
+@router.get("/sessions/{session_id}/citations")
+@traced("research.export_citations")
+async def export_citations(
+    session_id: str,
+    format: str = "json",
+    auth: AuthContext = Depends(get_current_user),
+) -> Any:
+    """Export citations from a research session (Feature 2C).
+
+    Formats: json (default), bibtex, markdown
+    """
+    from src.core.nexus_research_grounding import research_graph
+
+    session = await research_graph.get_session(session_id, auth.tenant_id)
+    if not session:
+        raise NotFoundError(f"Research session '{session_id}' not found")
+
+    # Collect all unique citations across turns
+    citations: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for turn in session.get("turns", []):
+        for cit in turn.get("sources_consulted", []):
+            cid = cit.get("source_id", "")
+            if cid and cid not in seen_ids:
+                seen_ids.add(cid)
+                citations.append(cit)
+
+    if format == "bibtex":
+        lines = []
+        for i, c in enumerate(citations, 1):
+            key = c.get("source_id", f"ref{i}").replace(":", "_").replace("/", "_")
+            title = c.get("source_title", "Untitled")
+            lines.append(f"@misc{{{key},")
+            lines.append(f"  title = {{{title}}},")
+            lines.append(f"  note = {{{c.get('content_preview', '')[:200]}}},")
+            lines.append(f"  relevance = {{{c.get('relevance_score', 0):.2f}}}",)
+            lines.append("}")
+            lines.append("")
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("\n".join(lines), media_type="text/plain")
+
+    if format == "markdown":
+        lines = [f"# Citations — {session.get('title', 'Research Session')}", ""]
+        for i, c in enumerate(citations, 1):
+            title = c.get("source_title", "Untitled")
+            preview = c.get("content_preview", "")
+            score = c.get("relevance_score", 0)
+            lines.append(f"{i}. **{title}** (relevance: {score:.0%})")
+            if preview:
+                lines.append(f"   > {preview[:200]}")
+            lines.append("")
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("\n".join(lines), media_type="text/markdown")
+
+    # Default: JSON
+    return {
+        "session_id": session_id,
+        "citation_count": len(citations),
+        "citations": citations,
+    }

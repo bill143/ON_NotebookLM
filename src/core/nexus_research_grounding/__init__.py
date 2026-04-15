@@ -410,6 +410,13 @@ class ResearchGraph:
                 settings=settings,
             )
 
+            # Web search augmentation (Feature 2A)
+            web_results = await self._web_search(
+                query, query_analysis, settings=settings,
+            )
+            if web_results:
+                retrieved = self._merge_web_results(retrieved, web_results)
+
             checkpoint.current_phase = ResearchPhase.ANALYZE
             analysis = await self._analyze(query, checkpoint, retrieved)
 
@@ -553,6 +560,112 @@ Respond as JSON with keys: core_question, search_terms, is_follow_up, depth"""
                 "is_follow_up": bool(checkpoint.turns),
                 "depth": "detailed_analysis",
             }
+
+    @traced("research.web_search")
+    async def _web_search(
+        self,
+        query: str,
+        analysis: dict[str, Any],
+        *,
+        settings: dict[str, float | int],
+    ) -> list[dict[str, Any]]:
+        """
+        Feature 2A: Live web search retrieval.
+        Uses Tavily (primary) or DuckDuckGo (fallback).
+        Returns empty list if no web search provider is configured.
+        """
+        from src.config import get_settings
+
+        app_settings = get_settings()
+        search_terms = [query] + analysis.get("search_terms", [])[:2]
+        results: list[dict[str, Any]] = []
+
+        # Try Tavily first
+        tavily_key = getattr(app_settings, "tavily_api_key", "") or ""
+        if tavily_key:
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    for term in search_terms[:2]:
+                        resp = await client.post(
+                            "https://api.tavily.com/search",
+                            json={
+                                "api_key": tavily_key,
+                                "query": term,
+                                "search_depth": "basic",
+                                "max_results": 3,
+                                "include_answer": True,
+                            },
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            for r in data.get("results", []):
+                                results.append({
+                                    "source_id": f"web:{r.get('url', '')}",
+                                    "source_title": r.get("title", "Web Result"),
+                                    "content": r.get("content", ""),
+                                    "url": r.get("url", ""),
+                                    "score": r.get("score", 0.5),
+                                    "is_web": True,
+                                })
+                logger.info(f"Tavily returned {len(results)} web results")
+                return results
+            except Exception as e:
+                logger.warning(f"Tavily search failed: {e}")
+
+        # Fallback: DuckDuckGo (no API key needed)
+        try:
+            from duckduckgo_search import DDGS
+
+            with DDGS() as ddgs:
+                for term in search_terms[:2]:
+                    for r in ddgs.text(term, max_results=3):
+                        results.append({
+                            "source_id": f"web:{r.get('href', '')}",
+                            "source_title": r.get("title", "Web Result"),
+                            "content": r.get("body", ""),
+                            "url": r.get("href", ""),
+                            "score": 0.5,
+                            "is_web": True,
+                        })
+            logger.info(f"DuckDuckGo returned {len(results)} web results")
+        except ImportError:
+            logger.debug("No web search provider available (install duckduckgo-search)")
+        except Exception as e:
+            logger.warning(f"DuckDuckGo search failed: {e}")
+
+        return results
+
+    def _merge_web_results(
+        self,
+        retrieved: dict[str, Any],
+        web_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Merge web search results into the retrieval output."""
+        context = retrieved.get("context", "")
+        references = list(retrieved.get("references", []))
+
+        web_context_parts = []
+        for wr in web_results[:5]:
+            web_context_parts.append(
+                f"[Web: {wr['source_title']}]\n{wr['content'][:2000]}"
+            )
+            references.append(
+                SourceReference(
+                    source_id=wr["source_id"],
+                    source_title=f"[Web] {wr['source_title']}",
+                    chunk_index=0,
+                    content_preview=wr["content"][:250],
+                    relevance_score=wr.get("score", 0.5),
+                )
+            )
+
+        if web_context_parts:
+            web_section = "\n\n---\n\n".join(web_context_parts)
+            context = f"{context}\n\n=== WEB SEARCH RESULTS ===\n\n{web_section}"
+
+        return {"context": context, "references": references}
 
     async def _retrieve(
         self,
