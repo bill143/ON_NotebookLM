@@ -295,7 +295,6 @@ class PromptResult:
     def __str__(self) -> str:
         return self.content
 
-
     # ── Router-facing methods ─────────────────────────────────
 
     async def list_prompts(
@@ -315,18 +314,20 @@ class PromptResult:
                 if namespace and ns_dir.name != namespace:
                     continue
                 for prompt_file in ns_dir.glob("*.md"):
-                    results.append({
-                        "id": f"{ns_dir.name}/{prompt_file.stem}",
-                        "namespace": ns_dir.name,
-                        "name": prompt_file.stem,
-                        "version": "1.0.0",
-                        "content": prompt_file.read_text(encoding="utf-8")[:200],
-                        "variables": [],
-                        "model_target": None,
-                        "status": "active",
-                        "created_by": None,
-                        "created_at": datetime.now(UTC).isoformat(),
-                    })
+                    results.append(
+                        {
+                            "id": f"{ns_dir.name}/{prompt_file.stem}",
+                            "namespace": ns_dir.name,
+                            "name": prompt_file.stem,
+                            "version": "1.0.0",
+                            "content": prompt_file.read_text(encoding="utf-8")[:200],
+                            "variables": [],
+                            "model_target": None,
+                            "status": "active",
+                            "created_by": None,
+                            "created_at": datetime.now(UTC).isoformat(),
+                        }
+                    )
 
         return results
 
@@ -388,19 +389,19 @@ class PromptResult:
             "created_at": datetime.now(UTC).isoformat(),
         }
 
-    async def list_versions(
-        self, namespace: str, name: str
-    ) -> list[dict[str, Any]]:
+    async def list_versions(self, namespace: str, name: str) -> list[dict[str, Any]]:
         """List version history for a prompt."""
         from datetime import UTC, datetime
 
-        return [{
-            "version": "1.0.0",
-            "status": "active",
-            "changelog": "Initial version",
-            "created_at": datetime.now(UTC).isoformat(),
-            "created_by": None,
-        }]
+        return [
+            {
+                "version": "1.0.0",
+                "status": "active",
+                "changelog": "Initial version",
+                "created_at": datetime.now(UTC).isoformat(),
+                "created_by": None,
+            }
+        ]
 
     async def rollback(
         self,
@@ -422,18 +423,18 @@ class PromptResult:
         import uuid
 
         results = []
-        for tc in test_cases:
-            results.append({
-                "test_case_id": str(uuid.uuid4()),
-                "passed": True,
-                "score": 1.0,
-                "details": "Test executed (prompt resolved successfully)",
-            })
+        for _tc in test_cases:
+            results.append(
+                {
+                    "test_case_id": str(uuid.uuid4()),
+                    "passed": True,
+                    "score": 1.0,
+                    "details": "Test executed (prompt resolved successfully)",
+                }
+            )
         return results
 
-    async def get_performance(
-        self, namespace: str, name: str, days: int = 7
-    ) -> dict[str, Any]:
+    async def get_performance(self, namespace: str, name: str, days: int = 7) -> dict[str, Any]:
         """Get prompt performance metrics."""
         return {
             "namespace": namespace,

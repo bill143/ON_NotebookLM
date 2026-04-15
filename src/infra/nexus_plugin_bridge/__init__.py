@@ -130,8 +130,11 @@ class PluginManager:
                 version=version,
                 description=f"Plugin: {name}",
                 author="user",
-                permissions=[PluginPermission(p) for p in (permissions or [])
-                             if p in [e.value for e in PluginPermission]],
+                permissions=[
+                    PluginPermission(p)
+                    for p in (permissions or [])
+                    if p in [e.value for e in PluginPermission]
+                ],
                 config_schema=config or {},
             )
         if manifest.name in self._plugins:
@@ -174,7 +177,9 @@ class PluginManager:
             "installed_at": datetime.now(UTC).isoformat(),
         }
 
-    async def uninstall(self, plugin_name: str = "", *, tenant_id: str = "", name: str = "") -> None:
+    async def uninstall(
+        self, plugin_name: str = "", *, tenant_id: str = "", name: str = ""
+    ) -> None:
         """Uninstall a plugin."""
         target = name or plugin_name
         if target not in self._plugins:
@@ -227,9 +232,7 @@ class PluginManager:
             for m in self._plugins.values()
         ]
 
-    async def toggle(
-        self, tenant_id: str, name: str, enabled: bool
-    ) -> dict[str, Any]:
+    async def toggle(self, tenant_id: str, name: str, enabled: bool) -> dict[str, Any]:
         """Enable or disable a plugin."""
         if name not in self._plugins:
             raise PluginError(f"Plugin '{name}' not found")

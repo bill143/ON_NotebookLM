@@ -412,7 +412,9 @@ class ResearchGraph:
 
             # Web search augmentation (Feature 2A)
             web_results = await self._web_search(
-                query, query_analysis, settings=settings,
+                query,
+                query_analysis,
+                settings=settings,
             )
             if web_results:
                 retrieved = self._merge_web_results(retrieved, web_results)
@@ -601,14 +603,16 @@ Respond as JSON with keys: core_question, search_terms, is_follow_up, depth"""
                         if resp.status_code == 200:
                             data = resp.json()
                             for r in data.get("results", []):
-                                results.append({
-                                    "source_id": f"web:{r.get('url', '')}",
-                                    "source_title": r.get("title", "Web Result"),
-                                    "content": r.get("content", ""),
-                                    "url": r.get("url", ""),
-                                    "score": r.get("score", 0.5),
-                                    "is_web": True,
-                                })
+                                results.append(
+                                    {
+                                        "source_id": f"web:{r.get('url', '')}",
+                                        "source_title": r.get("title", "Web Result"),
+                                        "content": r.get("content", ""),
+                                        "url": r.get("url", ""),
+                                        "score": r.get("score", 0.5),
+                                        "is_web": True,
+                                    }
+                                )
                 logger.info(f"Tavily returned {len(results)} web results")
                 return results
             except Exception as e:
@@ -621,14 +625,16 @@ Respond as JSON with keys: core_question, search_terms, is_follow_up, depth"""
             with DDGS() as ddgs:
                 for term in search_terms[:2]:
                     for r in ddgs.text(term, max_results=3):
-                        results.append({
-                            "source_id": f"web:{r.get('href', '')}",
-                            "source_title": r.get("title", "Web Result"),
-                            "content": r.get("body", ""),
-                            "url": r.get("href", ""),
-                            "score": 0.5,
-                            "is_web": True,
-                        })
+                        results.append(
+                            {
+                                "source_id": f"web:{r.get('href', '')}",
+                                "source_title": r.get("title", "Web Result"),
+                                "content": r.get("body", ""),
+                                "url": r.get("href", ""),
+                                "score": 0.5,
+                                "is_web": True,
+                            }
+                        )
             logger.info(f"DuckDuckGo returned {len(results)} web results")
         except ImportError:
             logger.debug("No web search provider available (install duckduckgo-search)")
@@ -648,9 +654,7 @@ Respond as JSON with keys: core_question, search_terms, is_follow_up, depth"""
 
         web_context_parts = []
         for wr in web_results[:5]:
-            web_context_parts.append(
-                f"[Web: {wr['source_title']}]\n{wr['content'][:2000]}"
-            )
+            web_context_parts.append(f"[Web: {wr['source_title']}]\n{wr['content'][:2000]}")
             references.append(
                 SourceReference(
                     source_id=wr["source_id"],

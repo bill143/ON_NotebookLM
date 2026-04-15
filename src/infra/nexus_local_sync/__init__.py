@@ -265,7 +265,6 @@ class SyncQueue:
             "real_time_collab": is_online,
         }
 
-
     async def list_models(self) -> list[dict[str, Any]]:
         """List local models in router-friendly format."""
         detected = await self.detect_local_models()
@@ -319,9 +318,7 @@ class SyncManager:
     def __init__(self) -> None:
         self._queue = SyncQueue()
 
-    async def get_status(
-        self, tenant_id: str, user_id: str
-    ) -> dict[str, Any]:
+    async def get_status(self, tenant_id: str, user_id: str) -> dict[str, Any]:
         """Get sync status overview."""
         from sqlalchemy import text
 
@@ -356,9 +353,7 @@ class SyncManager:
         """Manually trigger sync processing."""
         await self._queue.process_queue(tenant_id, device_id="default")
 
-    async def list_conflicts(
-        self, tenant_id: str, user_id: str
-    ) -> list[dict[str, Any]]:
+    async def list_conflicts(self, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
         """List unresolved sync conflicts."""
         from sqlalchemy import text
 
@@ -389,9 +384,7 @@ class SyncManager:
             for r in rows
         ]
 
-    async def resolve_conflict(
-        self, tenant_id: str, conflict_id: str, strategy: str
-    ) -> None:
+    async def resolve_conflict(self, tenant_id: str, conflict_id: str, strategy: str) -> None:
         """Resolve a sync conflict."""
         from sqlalchemy import text
 
@@ -411,21 +404,76 @@ class SyncManager:
 def get_feature_matrix() -> list[dict[str, Any]]:
     """Module-level feature availability matrix."""
     features = [
-        {"feature": "Chat (AI conversation)", "online": True, "offline": True, "degraded_note": None},
+        {
+            "feature": "Chat (AI conversation)",
+            "online": True,
+            "offline": True,
+            "degraded_note": None,
+        },
         {"feature": "Source Upload (file)", "online": True, "offline": True, "degraded_note": None},
-        {"feature": "Source Upload (URL)", "online": True, "offline": False, "degraded_note": "Requires internet to fetch URL content"},
-        {"feature": "Source Upload (YouTube)", "online": True, "offline": False, "degraded_note": "Requires internet for transcript"},
+        {
+            "feature": "Source Upload (URL)",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires internet to fetch URL content",
+        },
+        {
+            "feature": "Source Upload (YouTube)",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires internet for transcript",
+        },
         {"feature": "Vector Search", "online": True, "offline": True, "degraded_note": None},
-        {"feature": "Deep Research (web)", "online": True, "offline": False, "degraded_note": "Web search requires internet"},
-        {"feature": "Deep Research (local)", "online": True, "offline": True, "degraded_note": "Limited to local sources only"},
-        {"feature": "Audio Generation", "online": True, "offline": True, "degraded_note": "Uses local Kokoro TTS when offline"},
+        {
+            "feature": "Deep Research (web)",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Web search requires internet",
+        },
+        {
+            "feature": "Deep Research (local)",
+            "online": True,
+            "offline": True,
+            "degraded_note": "Limited to local sources only",
+        },
+        {
+            "feature": "Audio Generation",
+            "online": True,
+            "offline": True,
+            "degraded_note": "Uses local Kokoro TTS when offline",
+        },
         {"feature": "Slide Generation", "online": True, "offline": True, "degraded_note": None},
-        {"feature": "Video Generation", "online": True, "offline": False, "degraded_note": "Requires cloud vision models"},
-        {"feature": "Export (PDF/DOCX/EPUB)", "online": True, "offline": True, "degraded_note": None},
-        {"feature": "Real-time Collaboration", "online": True, "offline": False, "degraded_note": "Requires WebSocket connection"},
-        {"feature": "Cloud Model Access", "online": True, "offline": False, "degraded_note": "Uses local Ollama models when offline"},
+        {
+            "feature": "Video Generation",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires cloud vision models",
+        },
+        {
+            "feature": "Export (PDF/DOCX/EPUB)",
+            "online": True,
+            "offline": True,
+            "degraded_note": None,
+        },
+        {
+            "feature": "Real-time Collaboration",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires WebSocket connection",
+        },
+        {
+            "feature": "Cloud Model Access",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Uses local Ollama models when offline",
+        },
         {"feature": "Flashcard Review", "online": True, "offline": True, "degraded_note": None},
-        {"feature": "Budget Tracking", "online": True, "offline": True, "degraded_note": "Local costs are $0"},
+        {
+            "feature": "Budget Tracking",
+            "online": True,
+            "offline": True,
+            "degraded_note": "Local costs are $0",
+        },
     ]
     return features
 

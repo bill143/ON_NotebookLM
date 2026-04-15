@@ -127,7 +127,7 @@ async def get_prompt(
     if version:
         ref = f"{ref}@{version}"
 
-    content = await prompt_registry.resolve(ref)
+    await prompt_registry.resolve(ref)
     prompt = await prompt_registry.get_prompt_metadata(namespace, name, version)
     return PromptResponse(**prompt)
 

@@ -12,22 +12,26 @@ from src.api.local import (
     FeatureAvailability,
     LocalModelInfo,
     SyncStatusResponse,
+)
+from src.api.local import (
     router as local_router,
 )
 from src.api.plugins import (
     PluginInstallRequest,
     PluginResponse,
     PluginToggleRequest,
+)
+from src.api.plugins import (
     router as plugins_router,
 )
 from src.api.prompts import (
     PromptCreate,
-    PromptResponse,
     PromptRollbackRequest,
     PromptTestCase,
+)
+from src.api.prompts import (
     router as prompts_router,
 )
-
 
 # ── Plugin Schemas ───────────────────────────────────────────
 
@@ -132,7 +136,7 @@ class TestPromptSchemas:
 
 
 class TestRouterRegistration:
-    @pytest.fixture()
+    @pytest.fixture
     def app(self):
         app = FastAPI()
         app.include_router(plugins_router, prefix="/api/v1")

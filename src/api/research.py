@@ -176,10 +176,13 @@ async def export_citations(
             lines.append(f"@misc{{{key},")
             lines.append(f"  title = {{{title}}},")
             lines.append(f"  note = {{{c.get('content_preview', '')[:200]}}},")
-            lines.append(f"  relevance = {{{c.get('relevance_score', 0):.2f}}}",)
+            lines.append(
+                f"  relevance = {{{c.get('relevance_score', 0):.2f}}}",
+            )
             lines.append("}")
             lines.append("")
         from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse("\n".join(lines), media_type="text/plain")
 
     if format == "markdown":
@@ -193,6 +196,7 @@ async def export_citations(
                 lines.append(f"   > {preview[:200]}")
             lines.append("")
         from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse("\n".join(lines), media_type="text/markdown")
 
     # Default: JSON

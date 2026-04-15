@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from loguru import logger
-from sqlalchemy import MetaData, text, select, update as sa_update, delete, func, and_
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -113,9 +113,7 @@ async def get_session(tenant_id: str | None = None):
             import re
 
             safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", tenant_id)
-            await session.execute(
-                text(f"SET LOCAL app.tenant_id = '{safe_tid}'")
-            )
+            await session.execute(text(f"SET LOCAL app.tenant_id = '{safe_tid}'"))
 
         yield session
         await session.commit()
@@ -175,9 +173,16 @@ class BaseRepository:
     """
 
     # Tables that support soft-delete (have deleted_at column)
-    _SOFT_DELETE_TABLES = frozenset({
-        "artifacts", "notebooks", "notes", "sources", "tenants", "users",
-    })
+    _SOFT_DELETE_TABLES = frozenset(
+        {
+            "artifacts",
+            "notebooks",
+            "notes",
+            "sources",
+            "tenants",
+            "users",
+        }
+    )
 
     # Tables that don't have an updated_at column
     _NO_UPDATED_AT = frozenset({"audit_logs"})

@@ -346,8 +346,8 @@ class ResponseCache:
         try:
             key = f"{self._PREFIX}{self._cache_key(prompt, model)}"
             conn.delete(key)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Cache invalidation failed", error=str(exc))
 
     @property
     def hit_rate(self) -> float:

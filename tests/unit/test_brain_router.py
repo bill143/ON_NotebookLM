@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 from src.api.brain import (
     FlashcardCreate,
-    FlashcardResponse,
     GenerateFlashcardsRequest,
     ProgressSummary,
     ReviewResponse,
@@ -19,9 +18,7 @@ from src.api.brain import (
 
 class TestSchemas:
     def test_flashcard_create_valid(self):
-        fc = FlashcardCreate(
-            notebook_id="nb-1", front="What is X?", back="Answer"
-        )
+        fc = FlashcardCreate(notebook_id="nb-1", front="What is X?", back="Answer")
         assert fc.notebook_id == "nb-1"
         assert fc.tags == []
 
@@ -40,26 +37,20 @@ class TestSchemas:
             assert rs.rating == rating
 
     def test_review_submit_invalid_rating(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="validation error"):
             ReviewSubmit(card_id="c-1", rating=0)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="validation error"):
             ReviewSubmit(card_id="c-1", rating=5)
 
     def test_generate_flashcards_defaults(self):
-        req = GenerateFlashcardsRequest(
-            notebook_id="nb-1", source_id="src-1"
-        )
+        req = GenerateFlashcardsRequest(notebook_id="nb-1", source_id="src-1")
         assert req.count == 10
 
     def test_generate_flashcards_limits(self):
-        with pytest.raises(Exception):
-            GenerateFlashcardsRequest(
-                notebook_id="nb-1", source_id="src-1", count=0
-            )
-        with pytest.raises(Exception):
-            GenerateFlashcardsRequest(
-                notebook_id="nb-1", source_id="src-1", count=51
-            )
+        with pytest.raises(ValueError, match="validation error"):
+            GenerateFlashcardsRequest(notebook_id="nb-1", source_id="src-1", count=0)
+        with pytest.raises(ValueError, match="validation error"):
+            GenerateFlashcardsRequest(notebook_id="nb-1", source_id="src-1", count=51)
 
     def test_progress_summary(self):
         ps = ProgressSummary(
@@ -91,9 +82,13 @@ class TestRouterRegistration:
 
     def test_router_has_routes(self):
         paths = [r.path for r in router.routes]
-        expected = ["/brain/flashcards", "/brain/flashcards/due",
-                    "/brain/flashcards/review", "/brain/flashcards/generate",
-                    "/brain/progress"]
+        expected = [
+            "/brain/flashcards",
+            "/brain/flashcards/due",
+            "/brain/flashcards/review",
+            "/brain/flashcards/generate",
+            "/brain/progress",
+        ]
         for p in expected:
             assert p in paths, f"Missing route: {p}"
 

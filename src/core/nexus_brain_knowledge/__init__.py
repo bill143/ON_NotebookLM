@@ -6,6 +6,7 @@ Provides:
 - FSRS-4.5 spaced repetition algorithm
 - Auto-flashcard generation from sources
 """
+
 from __future__ import annotations
 
 import math
@@ -167,6 +168,7 @@ class FSRSScheduler:
 
 
 # ── Knowledge Base Service ─────────────────────────────────────
+
 
 class KnowledgeBase:
     """Notebook-scoped knowledge management."""
@@ -478,13 +480,13 @@ class BrainManager:
         count: int = 10,
     ) -> list[dict[str, Any]]:
         """Auto-generate flashcards from a source using AI."""
+        from sqlalchemy import text
+
         from src.agents.nexus_agent_content import generate_flashcards
         from src.agents.nexus_model_layer import model_manager
 
         # Get source content
         from src.infra.nexus_data_persist import get_session
-
-        from sqlalchemy import text
 
         async with get_session(tenant_id) as session:
             result = await session.execute(
@@ -550,9 +552,7 @@ class BrainManager:
                 {"cid": card_id},
             )
             await session.execute(
-                text(
-                    "DELETE FROM flashcards WHERE id = :cid AND tenant_id = :tid"
-                ),
+                text("DELETE FROM flashcards WHERE id = :cid AND tenant_id = :tid"),
                 {"cid": card_id, "tid": tenant_id},
             )
             await session.commit()

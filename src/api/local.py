@@ -5,9 +5,7 @@ Codename: ESPERANTO
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from src.infra.nexus_vault_keys import AuthContext, get_current_user
