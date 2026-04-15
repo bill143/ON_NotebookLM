@@ -83,48 +83,83 @@ Nexus Notebook 11 LM is a production-grade AI-powered research and learning plat
 ### 1. Clone & Setup
 
 ```bash
+git clone <repo-url> nexus-notebook
+cd nexus-notebook
 cp .env.example .env
 # Edit .env with your API keys and database credentials
+# Required: JWT_SECRET, CSRF_SECRET, ENCRYPTION_KEY (change defaults!)
+# Optional: OPENAI_API_KEY, ANTHROPIC_API_KEY (for AI features)
 ```
 
-### 2. Start Infrastructure
+### 2. Start Infrastructure (Docker)
 
 ```bash
-# Core services only
-docker compose -f deploy/docker-compose.yml up -d
+# Core services (API + Postgres + Redis + Celery + backups)
+cd deploy
+docker compose up -d
+
+# With monitoring (Prometheus + Grafana)
+docker compose --profile monitoring up -d
 
 # With local AI models (Ollama + Kokoro TTS)
-docker compose -f deploy/docker-compose.yml --profile local-ai up -d
+docker compose --profile local-ai up -d
+
+# With frontend (Next.js)
+docker compose --profile frontend up -d
 ```
 
-### 3. Install Dependencies
+### 3. Development Mode (without Docker)
 
 ```bash
+# Install Python dependencies
 pip install -e ".[dev]"
-```
 
-### 4. Run Database Migrations
+# Install frontend dependencies
+cd frontend && npm install && cd ..
 
-```bash
-# The initial schema is auto-applied by Docker Compose
-# For manual setup:
+# Apply database schema (requires running Postgres)
 psql -U nexus -d nexus_notebook_11 -f database/schema/001_initial.sql
-```
 
-### 5. Start the Application
-
-```bash
+# Terminal 1: Start API server
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Start Celery worker (for async tasks)
+celery -A src.worker worker --loglevel=info --queues=default,source_processing,artifact_generation,embedding
+
+# Terminal 3: Start frontend
+cd frontend && npm run dev
 ```
 
-### 6. Verify
+### 4. Verify
 
 ```bash
 # Health check
 curl http://localhost:8000/health/ready
+# Expected: {"status":"ready","checks":{"database":"ok"}}
 
-# API docs
-open http://localhost:8000/api/docs
+# API root
+curl http://localhost:8000/api/v1
+# Expected: {"service":"Nexus Notebook 11 LM","version":"0.1.0","codename":"ESPERANTO"}
+
+# Interactive API docs
+open http://localhost:8000/docs
+```
+
+### 5. Run Tests
+
+```bash
+# Unit tests (no external dependencies needed)
+pytest tests/unit/ --no-cov
+
+# With coverage
+pytest tests/unit/
+
+# Integration tests (requires Postgres + Redis)
+pytest tests/integration/
+
+# Lint + format check
+ruff check src/ tests/
+ruff format src/ tests/ --check
 ```
 
 ---
@@ -213,7 +248,15 @@ NEXUS NOTEBOOK LM MAIN/
 | `POST` | `/api/v1/export` | Export content (PDF/DOCX/EPUB) |
 | `GET` | `/api/v1/export/formats` | Available export formats |
 | `GET` | `/api/v1/brain/flashcards/due` | FSRS due flashcards |
-| `POST` | `/api/v1/brain/flashcards/:id/review` | Review flashcard |
+| `POST` | `/api/v1/brain/flashcards/review` | Review flashcard |
+| `GET` | `/api/v1/brain/progress` | Learning progress |
+| `GET` | `/api/v1/local/models` | List local AI models |
+| `GET` | `/api/v1/local/features` | Online/offline feature matrix |
+| `GET` | `/api/v1/plugins` | List plugins (admin) |
+| `GET` | `/api/v1/prompts` | List prompt templates (admin) |
+| `POST` | `/api/v1/admin/backup` | Trigger database backup |
+| `GET` | `/api/v1/admin/audit-log` | Query audit log |
+| `DELETE` | `/api/v1/admin/users/:id/data` | GDPR erasure |
 | `POST` | `/api/v1/models` | Register AI model |
 | `POST` | `/api/v1/models/credentials` | Store encrypted API key |
 | `GET` | `/api/v1/models/usage/summary` | Usage statistics |
