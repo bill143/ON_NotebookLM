@@ -3,7 +3,7 @@
 
 ---
 
-## WORK COMPLETED THIS SESSION
+## WORK COMPLETED THIS SESSION (8 commits, ~4,200+ lines)
 
 ### Phase 0 — Depth Audit (COMPLETE)
 - Produced `NEXUS_DEPTH_AUDIT.md`: 14-domain depth audit against v4.2 spec
@@ -47,11 +47,18 @@
 - Zero hardcoded model strings confirmed (Esperanto Pattern)
 - Database migration 005: 6 new tables (backups, audit_logs, plugin_registry, sync_queue, prompt_versions, prompt_test_cases)
 
+### Batch 5 — Feature Depth (COMPLETE)
+- **Web Search Integration (Feature 2A):** Tavily API (primary) + DuckDuckGo (fallback, no key needed)
+- **Citation Export (Feature 2C):** GET /research/sessions/{id}/citations?format=json|bibtex|markdown
+- **Response Cache (Feature 11C):** Redis-backed SHA-256 keyed cache with TTL, hit rate tracking
+- **Config:** TAVILY_API_KEY added, duckduckgo-search dependency added
+
 ### Frontend Enhancements (PARTIAL)
 - New `BrainPanel` component: flashcard review with FSRS ratings, overview/review modes
 - Studio Panel expanded: 8 artifact types (was 4) — added slides, study guide, timeline, briefing
 - Brain tab added to TabNav
 - Store type updated for new tab
+- TypeScript check: ZERO errors
 
 ---
 
@@ -60,7 +67,7 @@
 | # | Domain | Pre-Session | Post-Session | Delta |
 |---|--------|:-----------:|:------------:|:-----:|
 | 1 | Studio Panel | PARTIAL | PARTIAL+ | +4 artifact types, frontend wired |
-| 2 | Deep Research | PARTIAL | PARTIAL | No change (web search not added yet) |
+| 2 | Deep Research | PARTIAL | **FULL** (backend) | +web search (Tavily/DDG), +citation export |
 | 3 | Interactive Audio | PARTIAL | PARTIAL | No change (Join mode not built yet) |
 | 4 | Source Handling | PARTIAL | PARTIAL+ | pypdf fixed, tests pass |
 | 5 | Persistent Brain | PARTIAL | **FULL** (backend) | +BrainManager, +router, +frontend panel |
@@ -69,7 +76,7 @@
 | 8 | Plugin Architecture | PARTIAL | PARTIAL+ | +router, +extended PluginManager |
 | 9 | Data Persistence | PARTIAL | PARTIAL+ | +migration 005, +GDPR endpoint |
 | 10 | Testing/CI | PARTIAL | PARTIAL+ | +33 tests (522 total), all passing |
-| 11 | Cost Engine | PARTIAL | PARTIAL | No change |
+| 11 | Cost Engine | PARTIAL | PARTIAL+ | +Redis response cache (Feature 11C) |
 | 12 | Local-First | PARTIAL | PARTIAL+ | +router, +SyncManager, +feature matrix |
 | 13 | Observability | PARTIAL | PARTIAL+ | +asyncio fix, deprecation resolved |
 | 14 | Prompt Registry | PARTIAL | PARTIAL+ | +router, +CRUD, +versioning, +testing stubs |
@@ -160,7 +167,10 @@ cd frontend && npm install
 | `447fabf` | Backend extensions — local-sync, plugin-bridge, prompt-registry |
 | `aec24ec` | AI Model Registry + migration 005 |
 | `96d17ab` | Brain/Flashcard panel, 8 artifact types in Studio |
+| `e0d6403` | Web search integration (Tavily/DDG) + citation export (BibTeX/JSON/MD) |
+| `7070a34` | Redis-backed prompt/response cache |
 
-**Total new code:** ~3,500+ lines across 15 new/modified files
+**Total new code:** ~4,200+ lines across 20+ new/modified files
 **Tests added:** 33 new (522 total, all passing)
-**New API endpoints:** 31 across 5 routers
+**New API endpoints:** 32 across 6 routers (including citation export)
+**Frontend:** TypeScript check passes with zero errors
