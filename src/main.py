@@ -137,9 +137,10 @@ async def request_context_middleware(request: Request, call_next) -> Response:
 @app.exception_handler(NexusError)
 async def nexus_error_handler(request: Request, exc: NexusError) -> JSONResponse:
     """Handle all NexusError subclasses with proper status codes."""
+    safe_msg = str(exc.message).replace("{", "{{").replace("}", "}}")
     logger.log(
         "ERROR" if exc.severity.value in ("high", "critical") else "WARNING",
-        f"API Error: {exc.error_code} — {exc.message}",
+        f"API Error: {exc.error_code} — {safe_msg}",
         status_code=exc.status_code,
         error_code=exc.error_code,
         path=str(request.url.path),

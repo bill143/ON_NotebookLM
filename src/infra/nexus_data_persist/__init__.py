@@ -107,9 +107,14 @@ async def get_session(tenant_id: str | None = None):
         await session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '60000'"))
 
         if tenant_id:
+            # SET does not support $1 bind parameters in PostgreSQL.
+            # tenant_id comes from a verified JWT (AuthContext), not
+            # user input, so quoting it as a literal is safe here.
+            import re
+
+            safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", tenant_id)
             await session.execute(
-                text("SET LOCAL app.tenant_id = :tid"),
-                {"tid": tenant_id},
+                text(f"SET LOCAL app.tenant_id = '{safe_tid}'")
             )
 
         yield session
@@ -151,6 +156,13 @@ def _validate_order_clause(clause: str) -> str:
     return clause
 
 
+def _stringify_uuids(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert UUID values to strings so Pydantic response models work."""
+    from uuid import UUID as _UUID
+
+    return {k: str(v) if isinstance(v, _UUID) else v for k, v in row.items()}
+
+
 class BaseRepository:
     """
     Base repository providing CRUD operations for any domain model.
@@ -162,9 +174,19 @@ class BaseRepository:
     - Soft delete support
     """
 
+    # Tables that support soft-delete (have deleted_at column)
+    _SOFT_DELETE_TABLES = frozenset({
+        "artifacts", "notebooks", "notes", "sources", "tenants", "users",
+    })
+
+    # Tables that don't have an updated_at column
+    _NO_UPDATED_AT = frozenset({"audit_logs"})
+
     def __init__(self, table_name: str) -> None:
         _validate_identifier(table_name)
         self.table_name = table_name
+        self._has_soft_delete = table_name in self._SOFT_DELETE_TABLES
+        self._has_updated_at = table_name not in self._NO_UPDATED_AT
 
     async def create(
         self,
@@ -177,7 +199,8 @@ class BaseRepository:
 
         data["id"] = record_id
         data["created_at"] = now
-        data["updated_at"] = now
+        if self._has_updated_at:
+            data["updated_at"] = now
         if tenant_id:
             data["tenant_id"] = tenant_id
 
@@ -213,12 +236,13 @@ class BaseRepository:
             query += " AND tenant_id = :tenant_id"
             params["tenant_id"] = tenant_id
 
-        query += " AND deleted_at IS NULL"
+        if self._has_soft_delete:
+            query += " AND deleted_at IS NULL"
 
         async with get_session(tenant_id) as session:
             result = await session.execute(text(query), params)
             row = result.mappings().first()
-            return dict(row) if row else None
+            return _stringify_uuids(dict(row)) if row else None
 
     async def list_all(
         self,
@@ -232,7 +256,10 @@ class BaseRepository:
         """List records with pagination and filtering."""
         _validate_order_clause(order_by)
 
-        query = f"SELECT * FROM {self.table_name} WHERE deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
+        if self._has_soft_delete:
+            query = f"SELECT * FROM {self.table_name} WHERE deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
+        else:
+            query = f"SELECT * FROM {self.table_name} WHERE 1=1"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"limit": limit, "offset": offset}
 
         if tenant_id:
@@ -249,7 +276,7 @@ class BaseRepository:
 
         async with get_session(tenant_id) as session:
             result = await session.execute(text(query), params)
-            return [dict(row) for row in result.mappings().all()]
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
     async def update(
         self,
@@ -280,7 +307,7 @@ class BaseRepository:
             row = result.mappings().first()
             if row:
                 logger.debug(f"Updated record in {self.table_name}", record_id=record_id)
-                return dict(row)
+                return _stringify_uuids(dict(row))
             return None
 
     async def soft_delete(
@@ -288,7 +315,9 @@ class BaseRepository:
         record_id: str,
         tenant_id: str | None = None,
     ) -> bool:
-        """Soft delete a record by setting deleted_at."""
+        """Soft delete a record by setting deleted_at (or hard delete if table lacks the column)."""
+        if not self._has_soft_delete:
+            return await self.hard_delete(record_id, tenant_id)
         now = datetime.now(UTC)
         query = f"UPDATE {self.table_name} SET deleted_at = :now, updated_at = :now WHERE id = :id AND deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"id": record_id, "now": now}
@@ -327,7 +356,8 @@ class BaseRepository:
         filters: dict[str, Any] | None = None,
     ) -> int:
         """Count records with optional filtering."""
-        query = f"SELECT COUNT(*) as cnt FROM {self.table_name} WHERE deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
+        base_filter = "deleted_at IS NULL" if self._has_soft_delete else "1=1"
+        query = f"SELECT COUNT(*) as cnt FROM {self.table_name} WHERE {base_filter}"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {}
 
         if tenant_id:
@@ -351,7 +381,8 @@ class BaseRepository:
         tenant_id: str | None = None,
     ) -> bool:
         """Check if a record exists."""
-        query = f"SELECT 1 FROM {self.table_name} WHERE id = :id AND deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
+        base_filter = " AND deleted_at IS NULL" if self._has_soft_delete else ""
+        query = f"SELECT 1 FROM {self.table_name} WHERE id = :id{base_filter}"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"id": record_id}
 
         if tenant_id:
@@ -441,7 +472,7 @@ class SourceRepository(BaseRepository):
                     "limit": limit,
                 },
             )
-            return [dict(row) for row in result.mappings().all()]
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
     async def text_search(
         self,
@@ -465,7 +496,7 @@ class SourceRepository(BaseRepository):
                 text(query),
                 {"query": query_text, "tenant_id": tenant_id, "limit": limit},
             )
-            return [dict(row) for row in result.mappings().all()]
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
 
 class ArtifactRepository(BaseRepository):

@@ -36,6 +36,8 @@ class NotebookUpdate(BaseModel):
 
 
 class NotebookResponse(BaseModel):
+    model_config = {"from_attributes": True, "coerce_numbers_to_str": False}
+
     id: str
     name: str
     description: str = ""
