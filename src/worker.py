@@ -20,6 +20,7 @@ from typing import Any, TypeVar
 T = TypeVar("T")
 
 from celery import Celery, signals
+from celery.schedules import crontab
 from loguru import logger
 
 from src.config import get_settings
@@ -56,6 +57,7 @@ celery_app.conf.update(
         "nexus.tasks.process_source": {"queue": "source_processing"},
         "nexus.tasks.generate_artifact": {"queue": "artifact_generation"},
         "nexus.tasks.batch_embed": {"queue": "embedding"},
+        "nexus.vault.classify_document": {"queue": "vault_classification"},
     },
     task_default_queue="default",
 )
@@ -433,12 +435,119 @@ def generate_flashcards_scheduled(notebook_id: str, tenant_id: str, user_id: str
     return run_async(_gen())
 
 
+# ── Vault Classification Task ───────────────────────────────
+
+
+@celery_app.task(
+    name="nexus.vault.classify_document",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+)
+def classify_vault_document(self, document_id: str, tenant_id: str) -> dict:
+    """
+    Classify a vault document using the Construction Librarian AI.
+    1. Read file from storage
+    2. Run LibrarianAgent classification
+    3. Update document record with results
+    """
+    logger.info(f"Classifying vault document: {document_id}", task_id=self.request.id)
+
+    async def _classify():
+        from src.infra.nexus_data_persist import BaseRepository
+
+        repo = BaseRepository("vault_documents")
+
+        # Get document record
+        record = await repo.get_by_id(document_id, tenant_id)
+        if not record:
+            raise ValueError(f"Vault document {document_id} not found")
+
+        # Update status to processing
+        await repo.update(document_id, {"status": "processing"}, tenant_id)
+
+        try:
+            # Read file
+            file_path = record.get("file_path", "")
+            from pathlib import Path
+
+            path = Path(file_path)
+            if not path.exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+
+            file_bytes = path.read_bytes()
+            filename = record.get("filename", "unknown")
+
+            # Classify
+            from src.vault.librarian import librarian_agent
+
+            decision = await librarian_agent.classify(
+                file_bytes,
+                filename,
+                tenant_id=tenant_id,
+                project_id=record.get("project_id"),
+            )
+
+            # Update record
+            update_data = {
+                "status": "awaiting_review" if decision.requires_human_review else "classified",
+                "document_type": decision.document_type.value,
+                "confidence_score": decision.confidence_score,
+                "requires_human_review": decision.requires_human_review,
+                "classification_metadata": decision.metadata,
+                "classified_at": datetime.now(UTC),
+            }
+            await repo.update(document_id, update_data, tenant_id)
+
+            logger.info(
+                f"Vault document classified: {document_id} → {decision.document_type.value}",
+                confidence=decision.confidence_score,
+            )
+
+            return {
+                "status": "classified",
+                "document_id": document_id,
+                "document_type": decision.document_type.value,
+                "confidence": decision.confidence_score,
+            }
+
+        except Exception as e:
+            await repo.update(
+                document_id,
+                {"status": "error", "classification_metadata": {"error": str(e)[:500]}},
+                tenant_id,
+            )
+            logger.error(f"Vault classification failed: {document_id}", error=str(e))
+            raise
+
+    return run_async(_classify())
+
+
 # ── Beat Schedule (Periodic Tasks) ───────────────────────────
 
 celery_app.conf.beat_schedule = {
     "health-check": {
         "task": "nexus.tasks.health_check",
         "schedule": 300.0,  # Every 5 minutes
+    },
+    # Vault deadline monitoring tasks
+    "vault-check-rfi-deadlines": {
+        "task": "nexus.vault.check_rfi_deadlines",
+        "schedule": 3600.0,  # Every hour
+    },
+    "vault-check-coi-expirations": {
+        "task": "nexus.vault.check_coi_expirations",
+        "schedule": crontab(hour=7, minute=0),
+    },
+    "vault-check-permit-expirations": {
+        "task": "nexus.vault.check_permit_expirations",
+        "schedule": crontab(hour=7, minute=0),
+    },
+    "vault-check-invoice-due-dates": {
+        "task": "nexus.vault.check_invoice_due_dates",
+        "schedule": crontab(hour=7, minute=0),
     },
 }
 
@@ -447,3 +556,8 @@ celery_app.conf.beat_schedule = {
 def health_check() -> dict:
     """Worker health check heartbeat."""
     return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
+
+
+# ── Vault Workflow Tasks (registered from deadline_tasks module) ──
+
+import src.vault.workflows.deadline_tasks  # noqa: E402, F401 — register vault Celery tasks
