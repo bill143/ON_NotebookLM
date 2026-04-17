@@ -227,6 +227,7 @@ async def prometheus_metrics() -> Response:
 # ── API Routes ───────────────────────────────────────────────
 
 from src.api.admin import router as admin_router
+from src.vault.router import router as vault_router
 from src.api.artifacts import router as artifacts_router
 from src.api.brain import router as brain_router
 from src.api.chat import router as chat_router
@@ -261,6 +262,7 @@ app.include_router(plugins_router, prefix="/api/v1")
 app.include_router(local_router, prefix="/api/v1")
 app.include_router(prompts_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(vault_router, prefix="/api/v1")
 
 
 @app.get("/api/v1", tags=["Root"])
