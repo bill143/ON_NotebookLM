@@ -7,6 +7,7 @@ import { BrainPanel } from "@/components/BrainPanel";
 import { ResearchPanel } from "@/components/ResearchPanel";
 import { NotesPanel } from "@/components/NotesPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { VaultPage } from "@/components/Vault";
 import { cn, formatRelativeTime, truncate } from "@/lib/utils";
 import {
   BookOpen,
@@ -34,6 +35,7 @@ import {
   Brain,
   Download,
   FlaskConical,
+  Archive,
 } from "lucide-react";
 
 // ── Sidebar Component ────────────────────────────────────────
@@ -254,6 +256,7 @@ function TabNav() {
     { id: "research" as const, label: "Research", icon: FlaskConical },
     { id: "notes" as const, label: "Notes", icon: Layers },
     { id: "brain" as const, label: "Brain", icon: Brain },
+    { id: "vault" as const, label: "Vault", icon: Archive },
   ];
 
   return (
@@ -953,6 +956,7 @@ export default function Home() {
             {activeTab === "research" && <ResearchPanel />}
             {activeTab === "notes" && <NotesPanel />}
             {activeTab === "brain" && <BrainPanel />}
+            {activeTab === "vault" && <VaultPage />}
             {activeTab === "settings" && <SettingsPanel />}
           </>
         ) : (
