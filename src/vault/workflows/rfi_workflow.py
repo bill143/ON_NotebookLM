@@ -25,7 +25,6 @@ from src.vault.workflows.base_workflow import (
     WorkflowResult,
 )
 
-
 # ── Discipline → Reviewer Mapping ──────────────────────────
 
 DISCIPLINE_REVIEWERS: dict[str, str] = {

@@ -13,8 +13,11 @@ from typing import Any
 from loguru import logger
 from sqlalchemy import text
 
-from src.infra.nexus_data_persist import BaseRepository, get_session, _stringify_uuids, _validate_identifier
-
+from src.infra.nexus_data_persist import (
+    BaseRepository,
+    _stringify_uuids,
+    get_session,
+)
 
 # ── VaultDocumentRepository ────────────────────────────────────
 

@@ -17,7 +17,6 @@ from loguru import logger
 
 from src.worker import celery_app, run_async
 
-
 # ── Periodic Tasks ──────────────────────────────────────────
 
 

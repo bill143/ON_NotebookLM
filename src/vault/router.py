@@ -24,7 +24,6 @@ from src.infra.nexus_obs_tracing import traced
 from src.infra.nexus_vault_keys import AuthContext, get_current_user
 from src.vault.document_types import (
     DocumentStatus,
-    DocumentType,
     VaultApproveRequest,
     VaultDocumentResponse,
     VaultRejectRequest,
