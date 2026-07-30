@@ -26,6 +26,9 @@ os.environ.setdefault(
 )
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-bytes-long!!!")
+# Hard override (not setdefault): tests must never run with the dev auth
+# bypass active, regardless of the developer's .env.
+os.environ["DEV_AUTO_LOGIN"] = "false"
 os.environ.setdefault("CSRF_SECRET", "test-csrf-secret-32-bytes!!!!!!!")
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-32-bytes!!!!")
 
