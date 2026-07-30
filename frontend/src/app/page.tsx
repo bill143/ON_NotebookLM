@@ -36,6 +36,7 @@ import {
   Download,
   FlaskConical,
   Archive,
+  ClipboardList,
 } from "lucide-react";
 
 // ── Sidebar Component ────────────────────────────────────────
@@ -313,7 +314,7 @@ function SourcesPanel() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".pdf,.docx,.txt,.md,.csv"
+        accept=".pdf,.docx,.txt,.md,.csv,.mp3,.wav,.m4a,.mp4,.mov,.mkv,.webm"
         className="hidden"
         onChange={(e) => handleFileSelect(e.target.files)}
       />
@@ -637,6 +638,12 @@ function StudioPanel() {
     { type: "study_guide", label: "Study Guide", icon: BookOpen, desc: "Structured learning guide" },
     { type: "timeline", label: "Timeline", icon: Globe, desc: "Chronological event timeline" },
     { type: "briefing", label: "Briefing", icon: Download, desc: "Executive briefing document" },
+    {
+      type: "meeting_minutes",
+      label: "Meeting Minutes",
+      icon: ClipboardList,
+      desc: "Structured minutes from a meeting recording — decisions, action items, timestamps",
+    },
   ];
 
   const handleCreate = async (
