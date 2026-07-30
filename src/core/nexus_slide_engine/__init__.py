@@ -15,30 +15,30 @@ import io
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
-from loguru import logger
-
-from src.infra.nexus_obs_tracing import traced
 from src.exceptions import ValidationError
+from src.infra.nexus_obs_tracing import traced
 
 
 @dataclass
 class SlideContent:
     """Content for a single slide."""
-    layout: str = "content"      # "title", "content", "two_column", "section", "blank"
+
+    layout: str = "content"  # "title", "content", "two_column", "section", "blank"
     title: str = ""
     body: str = ""
     bullets: list[str] = field(default_factory=list)
-    left_content: str = ""       # For two-column layout
+    left_content: str = ""  # For two-column layout
     right_content: str = ""
-    notes: str = ""              # Speaker notes
-    image_path: Optional[str] = None
+    notes: str = ""  # Speaker notes
+    image_path: str | None = None
 
 
 @dataclass
 class SlideConfig:
     """Slide deck configuration."""
+
     title: str = "Nexus Presentation"
     subtitle: str = ""
     author: str = "Nexus Notebook 11 LM"
@@ -53,6 +53,7 @@ class SlideConfig:
 @dataclass
 class SlideResult:
     """Output from slide generation."""
+
     data: bytes
     filename: str
     slide_count: int
@@ -66,18 +67,17 @@ class SlideEngine:
     async def generate(
         self,
         content: str | dict | list,
-        config_dict: Optional[dict[str, Any]] = None,
+        config_dict: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate a slide deck from content."""
         try:
             from pptx import Presentation
-            from pptx.util import Inches, Pt, Emu
             from pptx.dml.color import RGBColor
-            from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-        except ImportError:
+            from pptx.util import Inches, Pt
+        except ImportError as e:
             raise ValidationError(
                 "python-pptx is required for slide generation. Install with: pip install python-pptx"
-            )
+            ) from e
 
         config = SlideConfig(**(config_dict or {}))
         slides = self._parse_content(content)
@@ -87,7 +87,7 @@ class SlideEngine:
         prs.slide_height = Inches(config.height_inches)
 
         brand_rgb = self._hex_to_rgb(config.brand_color)
-        accent_rgb = self._hex_to_rgb(config.accent_color)
+        self._hex_to_rgb(config.accent_color)
 
         # Title slide
         title_layout = prs.slide_layouts[0]
@@ -171,13 +171,15 @@ class SlideEngine:
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict):
-                    slides.append(SlideContent(
-                        layout=item.get("layout", "content"),
-                        title=item.get("title", ""),
-                        body=item.get("body", ""),
-                        bullets=item.get("bullets", []),
-                        notes=item.get("notes", ""),
-                    ))
+                    slides.append(
+                        SlideContent(
+                            layout=item.get("layout", "content"),
+                            title=item.get("title", ""),
+                            body=item.get("body", ""),
+                            bullets=item.get("bullets", []),
+                            notes=item.get("notes", ""),
+                        )
+                    )
             return slides
 
         if isinstance(content, dict):
@@ -197,7 +199,7 @@ class SlideEngine:
             if heading_match:
                 level = len(heading_match.group(1))
                 title = heading_match.group(2).strip()
-                body_text = section[heading_match.end():].strip()
+                body_text = section[heading_match.end() :].strip()
 
                 if level == 1:
                     slides.append(SlideContent(layout="section", title=title))
@@ -213,26 +215,30 @@ class SlideEngine:
                         remaining_text.append(line)
 
                 if bullets or remaining_text:
-                    slides.append(SlideContent(
-                        title=title,
-                        body="\n".join(remaining_text) if not bullets else "",
-                        bullets=bullets,
-                    ))
+                    slides.append(
+                        SlideContent(
+                            title=title,
+                            body="\n".join(remaining_text) if not bullets else "",
+                            bullets=bullets,
+                        )
+                    )
             else:
                 # No heading — treat as content slide
-                lines = [l.strip() for l in section.split("\n") if l.strip()]
+                lines = [line.strip() for line in section.split("\n") if line.strip()]
                 if lines:
-                    slides.append(SlideContent(
-                        title=lines[0][:80],
-                        body="\n".join(lines[1:]),
-                    ))
+                    slides.append(
+                        SlideContent(
+                            title=lines[0][:80],
+                            body="\n".join(lines[1:]),
+                        )
+                    )
 
         return slides or [SlideContent(title="Content", body=str(content)[:500])]
 
     @staticmethod
     def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         h = hex_color.lstrip("#")
-        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
 # Global singleton

@@ -12,10 +12,9 @@ Provides:
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from loguru import logger
 
@@ -23,6 +22,7 @@ from loguru import logger
 @dataclass
 class UsageRecord:
     """A single AI API usage record."""
+
     tenant_id: str
     user_id: str
     model_name: str
@@ -35,9 +35,9 @@ class UsageRecord:
     cost_usd: float = 0.0
     latency_ms: float = 0.0
     success: bool = True
-    error_type: Optional[str] = None
-    request_id: Optional[str] = None
-    trace_id: Optional[str] = None
+    error_type: str | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
 
 
 class CostTracker:
@@ -79,6 +79,7 @@ class CostTracker:
 
             # Update metrics
             from src.infra.nexus_obs_tracing import metrics
+
             metrics.record_ai_call(
                 provider=record.provider,
                 model=record.model_name,
@@ -110,8 +111,9 @@ class CostTracker:
         Returns: {allowed: bool, remaining_usd: float, limit_usd: float}
         """
         try:
-            from src.infra import nexus_data_persist as db
             from sqlalchemy import text
+
+            from src.infra import nexus_data_persist as db
 
             query = """
                 SELECT bl.limit_usd, bl.hard_limit,
@@ -143,6 +145,7 @@ class CostTracker:
 
             if row["hard_limit"] and (current + estimated_cost) > limit:
                 from src.exceptions import TokenBudgetExceeded
+
                 raise TokenBudgetExceeded(
                     f"Budget exceeded: ${current:.2f} / ${limit:.2f}",
                     details={"current_usd": current, "limit_usd": limit},
@@ -165,15 +168,17 @@ class CostTracker:
     async def get_usage_summary(
         self,
         tenant_id: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         period_days: int = 30,
     ) -> dict[str, Any]:
         """Get usage summary for a tenant/user over a period."""
-        from src.infra import nexus_data_persist as db
-        from sqlalchemy import text
         from datetime import timedelta
 
-        period_start = datetime.now(timezone.utc) - timedelta(days=period_days)
+        from sqlalchemy import text
+
+        from src.infra import nexus_data_persist as db
+
+        period_start = datetime.now(UTC) - timedelta(days=period_days)
 
         query = """
             SELECT
@@ -237,8 +242,129 @@ class CostTracker:
                     utilization_pct=utilization,
                 )
         except Exception:
-            pass  # Budget alerts must never crash
+            logger.warning(
+                "Budget alert check failed (non-fatal)",
+                tenant_id=tenant_id,
+                user_id=user_id,
+                exc_info=True,
+            )
 
 
-# Global singleton
+# ── Prompt/Response Cache (Feature 11C) ──────────────────────
+
+
+class ResponseCache:
+    """
+    Redis-backed prompt/response cache.
+    Caches LLM responses keyed by hash of (prompt_template + rendered_variables).
+    Saves tokens and reduces latency for repeated queries.
+    """
+
+    _PREFIX = "nexus:llm_cache:"
+
+    def __init__(self) -> None:
+        self._redis: Any = None
+        self._init_attempted = False
+        self._hits = 0
+        self._misses = 0
+
+    def _get_redis(self) -> Any:
+        if self._redis is not None:
+            return self._redis
+        if self._init_attempted:
+            return None
+        self._init_attempted = True
+        try:
+            import redis as redis_lib
+
+            from src.config import get_settings
+
+            settings = get_settings()
+            self._redis = redis_lib.Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            self._redis.ping()
+        except Exception:
+            self._redis = None
+        return self._redis
+
+    @staticmethod
+    def _cache_key(prompt: str, model: str = "") -> str:
+        """Generate cache key from prompt content hash."""
+        import hashlib
+
+        content = f"{model}:{prompt}"
+        return hashlib.sha256(content.encode()).hexdigest()[:32]
+
+    def get(self, prompt: str, model: str = "") -> str | None:
+        """Look up a cached response. Returns None on miss."""
+        conn = self._get_redis()
+        if conn is None:
+            return None
+        try:
+            key = f"{self._PREFIX}{self._cache_key(prompt, model)}"
+            result = conn.get(key)
+            if result:
+                self._hits += 1
+                logger.debug("Cache HIT", key=key[:20])
+            else:
+                self._misses += 1
+            return result
+        except Exception:
+            self._misses += 1
+            return None
+
+    def put(
+        self,
+        prompt: str,
+        response: str,
+        model: str = "",
+        ttl_seconds: int | None = None,
+    ) -> None:
+        """Cache a response."""
+        conn = self._get_redis()
+        if conn is None:
+            return
+        try:
+            from src.config import get_settings
+
+            settings = get_settings()
+            ttl = ttl_seconds or settings.cache_ttl_seconds
+            key = f"{self._PREFIX}{self._cache_key(prompt, model)}"
+            conn.setex(key, ttl, response)
+        except Exception as exc:
+            logger.warning("Response cache write failed", error=str(exc))
+
+    def invalidate(self, prompt: str, model: str = "") -> None:
+        """Invalidate a cached response."""
+        conn = self._get_redis()
+        if conn is None:
+            return
+        try:
+            key = f"{self._PREFIX}{self._cache_key(prompt, model)}"
+            conn.delete(key)
+        except Exception as exc:
+            logger.debug("Cache invalidation failed", error=str(exc))
+
+    @property
+    def hit_rate(self) -> float:
+        """Cache hit rate as a percentage."""
+        total = self._hits + self._misses
+        return (self._hits / total * 100) if total > 0 else 0.0
+
+    def stats(self) -> dict[str, Any]:
+        """Return cache statistics."""
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate_pct": round(self.hit_rate, 1),
+            "total_requests": self._hits + self._misses,
+        }
+
+
+# Global singletons
 cost_tracker = CostTracker()
+response_cache = ResponseCache()

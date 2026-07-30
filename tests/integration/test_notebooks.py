@@ -5,15 +5,12 @@ Tests full request→response cycle through FastAPI.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import (
-    auth_headers,
-    make_notebook_data,
-    TEST_USER_ID,
-    TEST_TENANT_ID,
-)
+from tests.conftest import make_notebook_data
 
 
 @pytest.mark.asyncio
@@ -76,8 +73,9 @@ class TestNotebooksAPI:
 
     async def test_get_notebook_not_found(self, client: AsyncClient, user_headers: dict):
         """GET /api/v1/notebooks/:id — returns 404 for unknown notebook."""
+        missing = str(uuid.uuid4())
         response = await client.get(
-            "/api/v1/notebooks/nonexistent-id",
+            f"/api/v1/notebooks/{missing}",
             headers=user_headers,
         )
 

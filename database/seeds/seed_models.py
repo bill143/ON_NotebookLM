@@ -1,9 +1,9 @@
 """
-Nexus Model Seeding — Register Default AI Models & Credentials
+Nexus Model Seeding — Register Default AI Models & Prompt Versions
 Codename: ESPERANTO
 
-Run this script to populate the ai_models and default_models tables
-with the production model registry defined in the forensic analysis.
+Populates the ai_models and prompt_versions tables with initial data.
+Uses synchronous psycopg2 for simplicity — no async app infrastructure needed.
 
 Usage:
     python -m database.seeds.seed_models
@@ -11,15 +11,11 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
+import os
 import uuid
 from datetime import datetime, timezone
 
-from loguru import logger
-
-
 # ── Default Model Registry ───────────────────────────────────
-# Source: Forensic Analysis Section 4, AI Model Registry
 
 DEFAULT_MODELS = [
     # ─── Chat / LLM Models ──────────────────────────────
@@ -245,112 +241,173 @@ DEFAULT_TASK_MODELS = [
     {"task_type": "vision", "model_name": "Gemini 2.0 Flash Vision", "priority": 1},
 ]
 
+DEFAULT_PROMPT_VERSIONS = [
+    {
+        "name": "default_chat",
+        "namespace": "default",
+        "version": "1.0.0",
+        "content": (
+            "You are a helpful AI assistant. Answer questions clearly and concisely "
+            "based on the provided context."
+        ),
+    },
+    {
+        "name": "default_summarization",
+        "namespace": "default",
+        "version": "1.0.0",
+        "content": (
+            "You are an expert summarizer. Create a clear, comprehensive summary of the "
+            "provided content, highlighting the key points and main ideas."
+        ),
+    },
+    {
+        "name": "default_quiz_generation",
+        "namespace": "default",
+        "version": "1.0.0",
+        "content": (
+            "You are an expert educator. Generate thoughtful quiz questions with multiple "
+            "choice answers based on the provided content. Each question should test "
+            "understanding of key concepts."
+        ),
+    },
+    {
+        "name": "default_flashcard_generation",
+        "namespace": "default",
+        "version": "1.0.0",
+        "content": (
+            "You are an expert at creating educational flashcards. Generate concise "
+            "question-and-answer flashcard pairs from the provided content to aid memorization."
+        ),
+    },
+]
+
 
 # ── Seeding Functions ────────────────────────────────────────
 
-async def seed_models(tenant_id: str | None = None) -> dict[str, int]:
-    """Seed the database with default AI models."""
-    from src.infra.nexus_data_persist import init_database, get_session
-    from sqlalchemy import text
+def _get_connection():
+    """Get a synchronous database connection."""
+    import psycopg2
+    import psycopg2.extras
 
-    await init_database()
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://nexus:nexus_dev_password@localhost:5432/nexus_notebook_11",
+    )
+    # Convert asyncpg URL to psycopg2 format
+    dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
+
+def seed_models() -> dict[str, int]:
+    """Seed the database with default AI models using synchronous psycopg2."""
+    import psycopg2.extras
+
+    conn = _get_connection()
     model_id_map: dict[str, str] = {}
     created = 0
     skipped = 0
 
-    async with get_session(tenant_id) as session:
-        for model in DEFAULT_MODELS:
-            # Check if model already exists
-            result = await session.execute(
-                text("""
+    try:
+        with conn.cursor() as cur:
+            for model in DEFAULT_MODELS:
+                # Check if model already exists (idempotent)
+                cur.execute(
+                    """
                     SELECT id FROM ai_models
-                    WHERE model_id_string = :mid AND provider = :provider
+                    WHERE model_id_string = %s AND provider = %s
                     LIMIT 1
-                """),
-                {"mid": model["model_id_string"], "provider": model["provider"]},
-            )
-            existing = result.mappings().first()
+                    """,
+                    (model["model_id_string"], model["provider"]),
+                )
+                existing = cur.fetchone()
 
-            if existing:
-                model_id_map[model["name"]] = str(existing["id"])
-                skipped += 1
-                logger.debug(f"Model already exists: {model['name']}")
-                continue
+                if existing:
+                    model_id_map[model["name"]] = str(existing["id"])
+                    skipped += 1
+                    print(f"  [skip] {model['name']} already exists")
+                    continue
 
-            model_id = str(uuid.uuid4())
-            model_id_map[model["name"]] = model_id
-            now = datetime.now(timezone.utc)
+                model_id = str(uuid.uuid4())
+                model_id_map[model["name"]] = model_id
+                now = datetime.now(timezone.utc)
 
-            await session.execute(
-                text("""
+                cur.execute(
+                    """
                     INSERT INTO ai_models (
                         id, name, provider, model_type, model_id_string,
                         is_local, base_url, max_tokens, supports_streaming,
                         supports_function_calling, cost_per_1k_input, cost_per_1k_output,
                         is_active, created_at, updated_at
                     ) VALUES (
-                        :id, :name, :provider, :model_type, :model_id_string,
-                        :is_local, :base_url, :max_tokens, :supports_streaming,
-                        :supports_function_calling, :cost_per_1k_input, :cost_per_1k_output,
-                        true, :now, :now
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        true, %s, %s
                     )
-                """),
-                {
-                    "id": model_id,
-                    "name": model["name"],
-                    "provider": model["provider"],
-                    "model_type": model["model_type"],
-                    "model_id_string": model["model_id_string"],
-                    "is_local": model.get("is_local", False),
-                    "base_url": model.get("base_url"),
-                    "max_tokens": model.get("max_tokens", 4096),
-                    "supports_streaming": model.get("supports_streaming", True),
-                    "supports_function_calling": model.get("supports_function_calling", False),
-                    "cost_per_1k_input": model.get("cost_per_1k_input", 0),
-                    "cost_per_1k_output": model.get("cost_per_1k_output", 0),
-                    "now": now,
-                },
-            )
-            created += 1
-            logger.info(f"Registered model: {model['name']} ({model['provider']}/{model['model_id_string']})")
+                    """,
+                    (
+                        model_id,
+                        model["name"],
+                        model["provider"],
+                        model["model_type"],
+                        model["model_id_string"],
+                        model.get("is_local", False),
+                        model.get("base_url"),
+                        model.get("max_tokens", 4096),
+                        model.get("supports_streaming", True),
+                        model.get("supports_function_calling", False),
+                        model.get("cost_per_1k_input", 0),
+                        model.get("cost_per_1k_output", 0),
+                        now,
+                        now,
+                    ),
+                )
+                created += 1
+                print(f"  [ok]   {model['name']} ({model['provider']}/{model['model_id_string']})")
 
-    # Seed default task→model mappings
-    defaults_created = 0
-    async with get_session(tenant_id) as session:
-        for mapping in DEFAULT_TASK_MODELS:
-            model_id = model_id_map.get(mapping["model_name"])
-            if not model_id:
-                logger.warning(f"Model not found for default: {mapping['model_name']}")
-                continue
+        # Seed default task→model mappings
+        defaults_created = 0
+        with conn.cursor() as cur:
+            for mapping in DEFAULT_TASK_MODELS:
+                model_id = model_id_map.get(mapping["model_name"])
+                if not model_id:
+                    print(f"  [warn] Model not found for default: {mapping['model_name']}")
+                    continue
 
-            # Check if default already exists
-            result = await session.execute(
-                text("""
+                # Check if mapping already exists (NULL tenant_id = global)
+                cur.execute(
+                    """
                     SELECT id FROM default_models
-                    WHERE task_type = :task_type AND model_id = :model_id
+                    WHERE tenant_id IS NULL
+                      AND task_type = %s
+                      AND priority = %s
                     LIMIT 1
-                """),
-                {"task_type": mapping["task_type"], "model_id": model_id},
-            )
-            if result.mappings().first():
-                continue
+                    """,
+                    (mapping["task_type"], mapping["priority"]),
+                )
+                if cur.fetchone():
+                    continue
 
-            now = datetime.now(timezone.utc)
-            await session.execute(
-                text("""
-                    INSERT INTO default_models (id, task_type, model_id, priority, created_at, updated_at)
-                    VALUES (:id, :task_type, :model_id, :priority, :now, :now)
-                """),
-                {
-                    "id": str(uuid.uuid4()),
-                    "task_type": mapping["task_type"],
-                    "model_id": model_id,
-                    "priority": mapping["priority"],
-                    "now": now,
-                },
-            )
-            defaults_created += 1
+                now = datetime.now(timezone.utc)
+                cur.execute(
+                    """
+                    INSERT INTO default_models (id, task_type, model_id, priority, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        mapping["task_type"],
+                        model_id,
+                        mapping["priority"],
+                        now,
+                    ),
+                )
+                defaults_created += 1
+
+        conn.commit()
+
+    finally:
+        conn.close()
 
     summary = {
         "models_created": created,
@@ -358,74 +415,70 @@ async def seed_models(tenant_id: str | None = None) -> dict[str, int]:
         "defaults_created": defaults_created,
         "total_models": len(DEFAULT_MODELS),
     }
-
-    logger.info(f"Model seeding complete", **summary)
     return summary
 
 
-async def seed_demo_tenant() -> dict[str, str]:
-    """Seed a demo tenant for development."""
-    from src.infra.nexus_data_persist import get_session
-    from sqlalchemy import text
+def seed_prompt_versions() -> int:
+    """Seed the database with default prompt versions."""
+    conn = _get_connection()
+    created = 0
 
-    tenant_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    try:
+        with conn.cursor() as cur:
+            for prompt in DEFAULT_PROMPT_VERSIONS:
+                now = datetime.now(timezone.utc)
+                cur.execute(
+                    """
+                    INSERT INTO prompt_versions (id, name, namespace, version, content, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, 'active', %s)
+                    ON CONFLICT (namespace, name, version) DO NOTHING
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        prompt["name"],
+                        prompt["namespace"],
+                        prompt["version"],
+                        prompt["content"],
+                        now,
+                    ),
+                )
+                if cur.rowcount:
+                    created += 1
+                    print(f"  [ok]   prompt {prompt['namespace']}/{prompt['name']} v{prompt['version']}")
+                else:
+                    print(f"  [skip] prompt {prompt['namespace']}/{prompt['name']} already exists")
 
-    async with get_session() as session:
-        await session.execute(
-            text("""
-                INSERT INTO tenants (id, name, slug, plan, settings, created_at, updated_at)
-                VALUES (:id, :name, :slug, :plan, :settings, :now, :now)
-                ON CONFLICT (slug) DO UPDATE SET updated_at = :now
-                RETURNING id
-            """),
-            {
-                "id": tenant_id,
-                "name": "ONeill Development",
-                "slug": "oneill-dev",
-                "plan": "enterprise",
-                "settings": '{"max_notebooks": 100, "max_sources_per_notebook": 50}',
-                "now": now,
-            },
-        )
-        # Get the actual tenant ID (might be existing)
-        result = await session.execute(
-            text("SELECT id FROM tenants WHERE slug = 'oneill-dev'")
-        )
-        row = result.mappings().first()
-        if row:
-            tenant_id = str(row["id"])
+        conn.commit()
 
-    logger.info(f"Demo tenant seeded: {tenant_id}")
-    return {"tenant_id": tenant_id, "name": "ONeill Development", "slug": "oneill-dev"}
+    finally:
+        conn.close()
+
+    return created
 
 
 # ── CLI Entry Point ──────────────────────────────────────────
 
-async def main():
+def main() -> None:
     """Seed all defaults."""
-    from src.infra.nexus_obs_tracing import setup_logging
-    setup_logging("INFO", "text")
+    print("=" * 60)
+    print("Nexus Notebook 11 LM — Model Seeding")
+    print("=" * 60)
 
-    logger.info("=" * 60)
-    logger.info("Nexus Notebook 11 LM — Model Seeding")
-    logger.info("=" * 60)
+    print("\nSeeding AI models...")
+    result = seed_models()
+    print(
+        f"\nModels: {result['models_created']} created, "
+        f"{result['models_skipped']} skipped"
+    )
+    print(f"Defaults: {result['defaults_created']} task→model mappings created")
 
-    # 1. Seed demo tenant
-    tenant = await seed_demo_tenant()
-    logger.info(f"Demo Tenant ID: {tenant['tenant_id']}")
+    print("\nSeeding prompt versions...")
+    prompts_created = seed_prompt_versions()
+    print(f"Prompts: {prompts_created} created")
 
-    # 2. Seed models (global — no tenant)
-    result = await seed_models()
-    logger.info(f"Models: {result['models_created']} created, {result['models_skipped']} skipped")
-    logger.info(f"Defaults: {result['defaults_created']} task→model mappings created")
-
-    logger.info("=" * 60)
-    logger.info("Seeding complete!")
-
-    from src.infra.nexus_data_persist import close_database
-    await close_database()
+    print("\n" + "=" * 60)
+    print("Seeding complete!")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -2,27 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.infra.nexus_vault_keys import AuthContext, get_current_user
 from src.infra.nexus_obs_tracing import traced
-from src.exceptions import NotFoundError
+from src.infra.nexus_vault_keys import AuthContext, get_current_user
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
 # ── Schemas ──────────────────────────────────────────────────
 
+
 class ChatMessage(BaseModel):
     content: str = Field(..., min_length=1, max_length=50_000)
-    session_id: Optional[str] = None
-    notebook_id: Optional[str] = None
-    source_ids: Optional[list[str]] = None
-    model_override: Optional[str] = None
+    session_id: str | None = None
+    notebook_id: str | None = None
+    source_ids: list[str] | None = None
+    model_override: str | None = None
     stream: bool = True
 
 
@@ -37,26 +38,29 @@ class ChatResponse(BaseModel):
 
 
 class SessionCreate(BaseModel):
-    notebook_id: Optional[str] = None
+    notebook_id: str | None = None
     session_type: str = "chat"
-    title: Optional[str] = None
+    title: str | None = None
 
 
 # ── Endpoints ────────────────────────────────────────────────
+
 
 @router.post("", response_model=ChatResponse)
 @traced("chat.send")
 async def send_message(
     data: ChatMessage,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> ChatResponse:
     """Send a chat message and get a grounded response."""
-    from src.infra.nexus_data_persist import get_session as db_session, sessions_repo
-    from src.infra.nexus_cost_tracker import cost_tracker, UsageRecord
-    from src.infra.nexus_prompt_registry import prompt_registry
-    from src.agents.nexus_model_layer import model_manager
+
     from sqlalchemy import text
-    import json
+
+    from src.agents.nexus_model_layer import model_manager
+    from src.infra.nexus_cost_tracker import UsageRecord, cost_tracker
+    from src.infra.nexus_data_persist import get_session as db_session
+    from src.infra.nexus_data_persist import sessions_repo
+    from src.infra.nexus_prompt_registry import prompt_registry
 
     # 1. Get or create session
     session_id = data.session_id
@@ -105,7 +109,9 @@ async def send_message(
 
             # Vector search for relevant context
             try:
-                embedding_provider = await model_manager.provision_embedding(tenant_id=auth.tenant_id)
+                embedding_provider = await model_manager.provision_embedding(
+                    tenant_id=auth.tenant_id
+                )
                 embedding_result = await embedding_provider.embed([data.content])
                 chunks = await sources_repo.vector_search(
                     query_embedding=embedding_result.embeddings[0],
@@ -116,11 +122,13 @@ async def send_message(
                 context_text = "\n\n".join(c["content"] for c in chunks)
             except Exception as e:
                 from loguru import logger
+
                 logger.warning(f"Context retrieval failed: {e}")
 
     # 4. Build messages with system prompt
     prompt_result = await prompt_registry.resolve(
-        "chat", "system",
+        "chat",
+        "system",
         variables={"context": context_text, "notebook": {"name": "Current Notebook"}},
     )
 
@@ -170,18 +178,20 @@ async def send_message(
         )
 
     # 8. Record usage
-    await cost_tracker.record_usage(UsageRecord(
-        tenant_id=auth.tenant_id,
-        user_id=auth.user_id,
-        model_name=response.model,
-        provider=response.provider,
-        feature_id="2A",
-        agent_id="researcher",
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        cost_usd=response.cost_usd,
-        latency_ms=response.latency_ms,
-    ))
+    await cost_tracker.record_usage(
+        UsageRecord(
+            tenant_id=auth.tenant_id,
+            user_id=auth.user_id,
+            model_name=response.model,
+            provider=response.provider,
+            feature_id="2A",
+            agent_id="researcher",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            latency_ms=response.latency_ms,
+        )
+    )
 
     return ChatResponse(
         session_id=session_id,
@@ -198,11 +208,12 @@ async def send_message(
 async def stream_message(
     data: ChatMessage,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> StreamingResponse:
     """Stream a chat response via SSE."""
+    import json
+
     from src.agents.nexus_model_layer import model_manager
     from src.infra.nexus_prompt_registry import prompt_registry
-    import json
 
     # Build messages
     prompt_result = await prompt_registry.resolve("chat", "system", variables={"context": ""})
@@ -217,8 +228,9 @@ async def stream_message(
         tenant_id=auth.tenant_id,
     )
 
-    async def generate():
-        async for token in llm.stream(messages):
+    async def generate() -> AsyncIterator[str]:
+        stream_iter = cast(AsyncIterator[str], llm.stream(messages))
+        async for token in stream_iter:
             yield f"data: {json.dumps({'token': token})}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -229,8 +241,8 @@ async def stream_message(
 @traced("chat.list_sessions")
 async def list_sessions(
     auth: AuthContext = Depends(get_current_user),
-    notebook_id: Optional[str] = None,
-):
+    notebook_id: str | None = None,
+) -> list[dict[str, Any]]:
     """List chat sessions."""
     from src.infra.nexus_data_persist import sessions_repo
 
@@ -246,10 +258,11 @@ async def list_sessions(
 async def get_session_messages(
     session_id: str,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> list[dict[str, Any]]:
     """Get all messages in a session."""
-    from src.infra.nexus_data_persist import get_session as db_session
     from sqlalchemy import text
+
+    from src.infra.nexus_data_persist import get_session as db_session
 
     async with db_session(auth.tenant_id) as session:
         result = await session.execute(

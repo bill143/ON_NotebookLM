@@ -1,0 +1,115 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: nexus-slo-alerts
+    folder: Nexus SLO
+    interval: 1m
+    rules:
+      # ── Alert 1: API p99 latency > 2s ──────────────
+      - uid: nexus-latency-p99
+        title: API p99 Latency Breach
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >-
+                histogram_quantile(0.99,
+                  rate(nexus_request_duration_seconds_bucket[5m])
+                ) > 2
+              intervalMs: 1000
+              maxDataPoints: 43200
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: API p99 latency exceeds 2 seconds
+
+      # ── Alert 2: 5xx error rate > 1% ───────────────
+      - uid: nexus-5xx-rate
+        title: 5xx Error Rate Breach
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >-
+                rate(nexus_request_total{status=~"5.."}[5m])
+                / rate(nexus_request_total[5m]) * 100 > 1
+              intervalMs: 1000
+              maxDataPoints: 43200
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 5xx error rate has exceeded 1%
+
+      # ── Alert 3: Celery queue depth > 50 ───────────
+      - uid: nexus-celery-queue
+        title: Celery Queue Depth High
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: celery_queue_length{queue="celery"} > 50
+              intervalMs: 1000
+              maxDataPoints: 43200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Celery task queue depth exceeds 50
+
+      # ── Alert 4: Redis memory > 80% ────────────────
+      - uid: nexus-redis-memory
+        title: Redis Memory Critical
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >-
+                redis_memory_used_bytes
+                / redis_memory_max_bytes * 100 > 80
+              intervalMs: 1000
+              maxDataPoints: 43200
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis memory usage exceeds 80%
+
+      # ── Alert 5: DB connection pool > 85% ──────────
+      - uid: nexus-db-connections
+        title: Postgres Connection Pool High
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >-
+                pg_stat_activity_count
+                / pg_settings_max_connections * 100 > 85
+              intervalMs: 1000
+              maxDataPoints: 43200
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Postgres connection pool exceeds 85% capacity

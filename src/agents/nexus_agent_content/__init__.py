@@ -7,12 +7,17 @@ Handles: reports, summaries, quizzes, podcast scripts, flashcard generation.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
-from loguru import logger
-
+from src.core.podcast_presets import (
+    FORMAT_TO_INSTRUCTIONS,
+    FORMAT_TO_TONE,
+    normalize_podcast_config,
+    resolve_speakers,
+)
+from src.infra.nexus_cost_tracker import UsageRecord, cost_tracker
 from src.infra.nexus_obs_tracing import traced
-from src.infra.nexus_cost_tracker import cost_tracker, UsageRecord
 
 
 @traced("agent.content.generate_summary")
@@ -25,7 +30,8 @@ async def generate_summary(state: Any) -> dict[str, Any]:
     tenant_id = state.tenant_id
 
     prompt = await prompt_registry.resolve(
-        "studio", "summary",
+        "studio",
+        "summary",
         variables={"source_content": source_content[:50000]},
     )
 
@@ -35,18 +41,20 @@ async def generate_summary(state: Any) -> dict[str, Any]:
         temperature=0.3,
     )
 
-    await cost_tracker.record_usage(UsageRecord(
-        tenant_id=tenant_id,
-        user_id=state.user_id,
-        model_name=response.model,
-        provider=response.provider,
-        feature_id="1A",
-        agent_id="content_generator",
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        cost_usd=response.cost_usd,
-        latency_ms=response.latency_ms,
-    ))
+    await cost_tracker.record_usage(
+        UsageRecord(
+            tenant_id=tenant_id,
+            user_id=state.user_id,
+            model_name=response.model,
+            provider=response.provider,
+            feature_id="1A",
+            agent_id="content_generator",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            latency_ms=response.latency_ms,
+        )
+    )
 
     return {"summary": response.content, "model": response.model}
 
@@ -54,16 +62,18 @@ async def generate_summary(state: Any) -> dict[str, Any]:
 @traced("agent.content.generate_quiz")
 async def generate_quiz(state: Any) -> dict[str, Any]:
     """Generate quiz questions from source material."""
+    import json
+
     from src.agents.nexus_model_layer import model_manager
     from src.infra.nexus_prompt_registry import prompt_registry
-    import json
 
     source_content = state.inputs.get("source_content", "")
     num_questions = state.inputs.get("num_questions", 10)
     tenant_id = state.tenant_id
 
     prompt = await prompt_registry.resolve(
-        "studio", "quiz_generator",
+        "studio",
+        "quiz_generator",
         variables={
             "source_content": source_content[:30000],
             "num_questions": num_questions,
@@ -95,27 +105,36 @@ async def generate_podcast_script(state: Any) -> dict[str, Any]:
     from src.infra.nexus_prompt_registry import prompt_registry
 
     source_content = state.inputs.get("source_content", "")
-    config = state.inputs.get("generation_config", {})
+    config = normalize_podcast_config(state.inputs.get("generation_config", {}))
     tenant_id = state.tenant_id
 
-    num_speakers = config.get("num_speakers", 2)
-    tone = config.get("tone", "conversational")
-    length = config.get("length", "medium")
+    format_style = config["format"]
+    language = config["language"]
+    speaker_profile = config["speaker_profile"]
+    length = config["length"]
+    if length == "longform":
+        # Current prompt length guidance supports short/medium/long buckets.
+        length = "long"
 
-    # Default speaker definitions
-    speakers = config.get("speakers", [
-        {"name": "Alex", "expertise": "Subject matter expert", "style": "analytical"},
-        {"name": "Jordan", "expertise": "Curious learner", "style": "engaging"},
-    ])
+    speakers = resolve_speakers(speaker_profile)
+    num_speakers = len(speakers)
+    tone = FORMAT_TO_TONE.get(format_style, "conversational")
+    format_instruction = FORMAT_TO_INSTRUCTIONS.get(
+        format_style, FORMAT_TO_INSTRUCTIONS["conversational"]
+    )
 
     prompt = await prompt_registry.resolve(
-        "podcast", "script_generator",
+        "podcast",
+        "script_generator",
         variables={
             "source_content": source_content[:40000],
             "num_speakers": num_speakers,
             "speakers": speakers,
             "tone": tone,
             "length": length,
+            "language": language,
+            "format_style": format_style,
+            "format_instruction": format_instruction,
         },
     )
 
@@ -126,27 +145,35 @@ async def generate_podcast_script(state: Any) -> dict[str, Any]:
         temperature=0.8,
     )
 
-    await cost_tracker.record_usage(UsageRecord(
-        tenant_id=tenant_id,
-        user_id=state.user_id,
-        model_name=response.model,
-        provider=response.provider,
-        feature_id="3A",
-        agent_id="script_generator",
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        cost_usd=response.cost_usd,
-        latency_ms=response.latency_ms,
-    ))
+    await cost_tracker.record_usage(
+        UsageRecord(
+            tenant_id=tenant_id,
+            user_id=state.user_id,
+            model_name=response.model,
+            provider=response.provider,
+            feature_id="3A",
+            agent_id="script_generator",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            latency_ms=response.latency_ms,
+        )
+    )
 
-    return {"script": response.content, "speakers": speakers, "model": response.model}
+    return {
+        "script": response.content,
+        "speakers": speakers,
+        "model": response.model,
+        "podcast_config": config,
+    }
 
 
 @traced("agent.content.generate_flashcards")
 async def generate_flashcards(state: Any) -> dict[str, Any]:
     """Generate flashcards from source material (Feature 5A)."""
-    from src.agents.nexus_model_layer import model_manager
     import json
+
+    from src.agents.nexus_model_layer import model_manager
 
     source_content = state.inputs.get("source_content", "")
     num_cards = state.inputs.get("num_cards", 20)
@@ -178,8 +205,9 @@ Content:
 @traced("agent.content.generate_insights")
 async def generate_insights(state: Any) -> dict[str, Any]:
     """Generate source insights (key takeaways, topics, entities)."""
-    from src.agents.nexus_model_layer import model_manager
     import json
+
+    from src.agents.nexus_model_layer import model_manager
 
     source_content = state.inputs.get("source_content", "")
     tenant_id = state.tenant_id
@@ -206,3 +234,85 @@ Content:
         insights = {"takeaways": [], "topics": [], "entities": [], "questions": []}
 
     return {"insights": insights, "model": response.model}
+
+
+@traced("agent.content.generate_meeting_minutes")
+async def generate_meeting_minutes(state: Any) -> dict[str, Any]:
+    """Generate structured meeting minutes from a timestamped transcript."""
+    from src.agents.nexus_model_layer import model_manager
+    from src.infra.nexus_prompt_registry import prompt_registry
+
+    source_content = state.inputs.get("source_content", "")
+    tenant_id = state.tenant_id
+
+    prompt = await prompt_registry.resolve(
+        "studio",
+        "meeting_minutes",
+        variables={
+            "source_content": source_content[:120000],
+            "meeting_title": state.inputs.get("meeting_title", ""),
+            "meeting_date": state.inputs.get("meeting_date", ""),
+            "attendees_hint": state.inputs.get("attendees_hint", ""),
+            "focus": state.inputs.get("focus", ""),
+        },
+    )
+
+    llm = await model_manager.provision_llm(task_type="transformation", tenant_id=tenant_id)
+    response = await llm.generate(
+        [{"role": "system", "content": str(prompt)}],
+        temperature=0.2,
+    )
+
+    await cost_tracker.record_usage(
+        UsageRecord(
+            tenant_id=tenant_id,
+            user_id=state.user_id,
+            model_name=response.model,
+            provider=response.provider,
+            feature_id="1A",
+            agent_id="content_generator",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            latency_ms=response.latency_ms,
+        )
+    )
+
+    return {"meeting_minutes": response.content, "model": response.model}
+
+
+class ContentAgent:
+    """Studio queue entrypoint: maps artifact_type → content generators."""
+
+    async def generate(
+        self,
+        *,
+        artifact_type: str,
+        source_content: str,
+        config: dict[str, Any],
+        tenant_id: str,
+    ) -> Any:
+        inputs = dict(config)
+        inputs["source_content"] = source_content
+        if artifact_type in ("podcast", "podcast_script"):
+            inputs.setdefault("generation_config", config)
+        state: Any = SimpleNamespace(
+            inputs=inputs,
+            tenant_id=tenant_id,
+            user_id=str(config.get("user_id", "")),
+        )
+
+        if artifact_type in ("podcast", "podcast_script"):
+            return await generate_podcast_script(state)
+        if artifact_type == "quiz":
+            return await generate_quiz(state)
+        if artifact_type == "key_concepts":
+            return await generate_insights(state)
+        if artifact_type == "flashcard":
+            return await generate_flashcards(state)
+        if artifact_type == "meeting_minutes":
+            return await generate_meeting_minutes(state)
+        return await generate_summary(state)
+
+
+content_agent = ContentAgent()

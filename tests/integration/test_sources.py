@@ -5,11 +5,12 @@ Tests file upload, URL/text ingestion, and search endpoints.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
 from tests.conftest import (
-    auth_headers,
     make_source_text_data,
     make_source_url_data,
 )
@@ -101,8 +102,9 @@ class TestSourcesAPI:
 
     async def test_get_source_not_found(self, client: AsyncClient, user_headers: dict):
         """GET /api/v1/sources/:id — returns 404."""
+        missing = str(uuid.uuid4())
         response = await client.get(
-            "/api/v1/sources/nonexistent-source",
+            f"/api/v1/sources/{missing}",
             headers=user_headers,
         )
 
@@ -129,6 +131,25 @@ class TestSourcesAPI:
         response = await client.post(
             "/api/v1/sources/search",
             json={"query": "machine learning", "search_type": "text", "limit": 5},
+            headers=user_headers,
+        )
+
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+    async def test_search_sources_accepts_retrieval_profile(
+        self, client: AsyncClient, user_headers: dict
+    ):
+        """POST /api/v1/sources/search — accepts advanced retrieval controls."""
+        response = await client.post(
+            "/api/v1/sources/search",
+            json={
+                "query": "learning",
+                "search_type": "text",
+                "limit": 5,
+                "search_profile": "deep",
+                "fusion_k": 75,
+            },
             headers=user_headers,
         )
 

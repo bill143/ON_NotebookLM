@@ -7,23 +7,22 @@ Handles: PDF, web, YouTube, audio, image, text extraction and transformation.
 
 from __future__ import annotations
 
-import hashlib
-from pathlib import Path
-from typing import Any, Optional
+from datetime import UTC
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from loguru import logger
 
-from src.infra.nexus_obs_tracing import traced
 from src.exceptions import (
-    SourceProcessingError,
     EmptyContentError,
-    UnsupportedFormatError,
     FileTooLargeError,
+    SourceProcessingError,
+    UnsupportedFormatError,
 )
-
+from src.infra.nexus_obs_tracing import traced
 
 # ── Content Extractors ───────────────────────────────────────
+
 
 class ContentExtractor:
     """
@@ -36,6 +35,7 @@ class ContentExtractor:
         """Extract text from PDF."""
         try:
             from pypdf import PdfReader
+
             reader = PdfReader(file_path)
             text_parts = []
             for page in reader.pages:
@@ -49,7 +49,7 @@ class ContentExtractor:
         except EmptyContentError:
             raise
         except Exception as e:
-            raise SourceProcessingError(f"PDF extraction failed: {e}", original_error=e)
+            raise SourceProcessingError(f"PDF extraction failed: {e}", original_error=e) from e
 
     @traced("source.extract.url")
     async def extract_url(self, url: str) -> str:
@@ -59,9 +59,9 @@ class ContentExtractor:
 
         try:
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                response = await client.get(url, headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; NexusBot/1.0)"
-                })
+                response = await client.get(
+                    url, headers={"User-Agent": "Mozilla/5.0 (compatible; NexusBot/1.0)"}
+                )
                 response.raise_for_status()
 
             # Check content size
@@ -84,7 +84,7 @@ class ContentExtractor:
         except (EmptyContentError, FileTooLargeError):
             raise
         except Exception as e:
-            raise SourceProcessingError(f"URL extraction failed: {e}", original_error=e)
+            raise SourceProcessingError(f"URL extraction failed: {e}", original_error=e) from e
 
     @traced("source.extract.text")
     async def extract_text(self, content: str) -> str:
@@ -105,7 +105,24 @@ class ContentExtractor:
         try:
             import asyncio
 
+<<<<<<< HEAD
             import yt_dlp
+=======
+            # Extract video ID from URL
+            parsed = urlparse(url)
+            hostname = parsed.hostname or ""
+            video_id = ""
+            if (
+                hostname == "youtube.com"
+                or hostname.endswith(".youtube.com")
+                or hostname == "www.youtube.com"
+            ):
+                from urllib.parse import parse_qs
+
+                video_id = parse_qs(parsed.query).get("v", [""])[0]
+            elif hostname == "youtu.be" or hostname.endswith(".youtu.be"):
+                video_id = parsed.path.strip("/")
+>>>>>>> origin/main
 
             ydl_opts: dict[str, Any] = {
                 "skip_download": True,
@@ -115,7 +132,14 @@ class ContentExtractor:
                 "no_warnings": True,
             }
 
+<<<<<<< HEAD
             loop = asyncio.get_event_loop()
+=======
+            # youtube-transcript-api exposes get_transcript on the class; stubs omit it.
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)  # type: ignore[attr-defined]
+            transcript = " ".join(entry["text"] for entry in transcript_list)
+            return transcript
+>>>>>>> origin/main
 
             def _fetch_info() -> dict[str, Any]:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -175,7 +199,25 @@ class ContentExtractor:
         except (EmptyContentError, SourceProcessingError):
             raise
         except Exception as e:
-            raise SourceProcessingError(f"YouTube extraction failed: {e}", original_error=e)
+            raise SourceProcessingError(f"YouTube extraction failed: {e}", original_error=e) from e
+
+    @traced("source.extract.video")
+    async def extract_video(self, file_path: str = "", url: str = "") -> str:
+        """Extract a timestamped transcript (+ keyframes to storage) from a
+        video file or any yt-dlp-supported URL. Captions first, Whisper fallback."""
+        from src.core.nexus_media_ingest import media_extractor
+
+        result = await media_extractor.extract(kind="video", file_path=file_path, url=url)
+        return result.transcript
+
+    @traced("source.extract.audio")
+    async def extract_audio(self, file_path: str = "", url: str = "") -> str:
+        """Extract a timestamped transcript from an audio file (mp3/wav/m4a/…)
+        or audio URL via captions/Whisper."""
+        from src.core.nexus_media_ingest import media_extractor
+
+        result = await media_extractor.extract(kind="audio", file_path=file_path, url=url)
+        return result.transcript
 
     async def extract(self, source_type: str, **kwargs: Any) -> str:
         """Route to the appropriate extractor."""
@@ -183,6 +225,12 @@ class ContentExtractor:
             "pdf": lambda: self.extract_pdf(kwargs.get("file_path", "")),
             "url": lambda: self.extract_url(kwargs.get("url", "")),
             "youtube": lambda: self.extract_youtube(kwargs.get("url", "")),
+            "video": lambda: self.extract_video(
+                kwargs.get("file_path", ""), kwargs.get("url", "")
+            ),
+            "audio": lambda: self.extract_audio(
+                kwargs.get("file_path", ""), kwargs.get("url", "")
+            ),
             "text": lambda: self.extract_text(kwargs.get("content", "")),
             "pasted_text": lambda: self.extract_text(kwargs.get("content", "")),
             "markdown": lambda: self.extract_text(kwargs.get("content", "")),
@@ -192,10 +240,11 @@ class ContentExtractor:
         if not extractor:
             raise UnsupportedFormatError(f"Unsupported source type: {source_type}")
 
-        return await extractor()
+        return cast(str, await extractor())
 
 
 # ── Source Processing Pipeline ───────────────────────────────
+
 
 class SourceProcessor:
     """
@@ -219,9 +268,9 @@ class SourceProcessor:
         3. Generate embeddings (async)
         4. Generate insights (async)
         """
-        from src.infra.nexus_data_persist import sources_repo, get_session
-        from sqlalchemy import text
-        from datetime import datetime, timezone
+        from datetime import datetime
+
+        from src.infra.nexus_data_persist import sources_repo
 
         # 1. Get source record
         source = await sources_repo.get_by_id(source_id, tenant_id)
@@ -229,10 +278,14 @@ class SourceProcessor:
             raise SourceProcessingError(f"Source {source_id} not found")
 
         # Update status
-        await sources_repo.update(source_id, {
-            "status": "processing",
-            "processing_started_at": datetime.now(timezone.utc),
-        }, tenant_id)
+        await sources_repo.update(
+            source_id,
+            {
+                "status": "processing",
+                "processing_started_at": datetime.now(UTC),
+            },
+            tenant_id,
+        )
 
         try:
             # 2. Extract content
@@ -248,16 +301,20 @@ class SourceProcessor:
             topics = await self._extract_topics(content, tenant_id)
 
             # 4. Update source with extracted content
-            await sources_repo.update(source_id, {
-                "status": "ready",
-                "full_text": content,
-                "word_count": word_count,
-                "topics": topics,
-                "processing_completed_at": datetime.now(timezone.utc),
-            }, tenant_id)
+            await sources_repo.update(
+                source_id,
+                {
+                    "status": "ready",
+                    "full_text": content,
+                    "word_count": word_count,
+                    "topics": topics,
+                    "processing_completed_at": datetime.now(UTC),
+                },
+                tenant_id,
+            )
 
             logger.info(
-                f"Source processed successfully",
+                "Source processed successfully",
                 source_id=source_id,
                 word_count=word_count,
                 topics=len(topics),
@@ -271,26 +328,44 @@ class SourceProcessor:
             }
 
         except Exception as e:
-            await sources_repo.update(source_id, {
-                "status": "error",
-                "processing_error": str(e)[:500],
-            }, tenant_id)
+            await sources_repo.update(
+                source_id,
+                {
+                    "status": "error",
+                    "processing_error": str(e)[:500],
+                },
+                tenant_id,
+            )
             raise
 
     async def _extract_topics(self, content: str, tenant_id: str) -> list[str]:
         """Extract topics from content using LLM."""
         try:
-            from src.agents.nexus_model_layer import model_manager
             import json
+
+            from src.agents.nexus_model_layer import model_manager
 
             llm = await model_manager.provision_llm(task_type="transformation", tenant_id=tenant_id)
             response = await llm.generate(
-                [{"role": "system", "content": f"Extract 3-7 key topics from this text. Return as JSON array of strings.\n\nText:\n{content[:5000]}"}],
+                [
+                    {
+                        "role": "system",
+                        "content": f"Extract 3-7 key topics from this text. Return as JSON array of strings.\n\nText:\n{content[:5000]}",
+                    }
+                ],
                 temperature=0.2,
                 response_format={"type": "json_object"},
             )
             result = json.loads(response.content)
-            return result.get("topics", result) if isinstance(result, dict) else result
+            topics: list[str]
+            if isinstance(result, dict):
+                raw = result.get("topics", result)
+                topics = [str(t) for t in raw] if isinstance(raw, list) else []
+            elif isinstance(result, list):
+                topics = [str(t) for t in result]
+            else:
+                topics = []
+            return topics
         except Exception:
             return []
 

@@ -11,12 +11,10 @@ Provides:
 
 from __future__ import annotations
 
-import io
-import json
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -26,22 +24,24 @@ from src.infra.nexus_obs_tracing import traced
 @dataclass
 class VideoScene:
     """A single scene in a video."""
+
     scene_id: str
     title: str
     narration_text: str
     visual_description: str
     duration_ms: float = 0.0
-    audio_data: Optional[bytes] = None
-    image_data: Optional[bytes] = None
+    audio_data: bytes | None = None
+    image_data: bytes | None = None
     subtitle_text: str = ""
 
 
 @dataclass
 class VideoConfig:
     """Video generation configuration."""
+
     resolution: tuple[int, int] = (1920, 1080)
     fps: int = 30
-    output_format: str = "mp4"       # "mp4", "webm"
+    output_format: str = "mp4"  # "mp4", "webm"
     codec: str = "libx264"
     bitrate: str = "4000k"
     include_subtitles: bool = True
@@ -56,12 +56,13 @@ class VideoConfig:
 @dataclass
 class VideoResult:
     """Output from video composition."""
+
     video_data: bytes
     duration_ms: float
     format: str
     scenes_count: int
     file_size_bytes: int
-    subtitle_data: Optional[str] = None
+    subtitle_data: str | None = None
 
 
 class VideoEngine:
@@ -74,7 +75,7 @@ class VideoEngine:
     async def compose(
         self,
         context: dict[str, Any],
-        config_dict: Optional[dict[str, Any]] = None,
+        config_dict: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Compose a video from generation context.
@@ -113,45 +114,54 @@ class VideoEngine:
 
         if transcript:
             for i, entry in enumerate(transcript):
-                scenes.append(VideoScene(
-                    scene_id=f"scene_{i+1}",
-                    title=f"Scene {i+1}",
-                    narration_text=entry.get("text", ""),
-                    visual_description=entry.get("text", "")[:100],
-                    duration_ms=entry.get("end_ms", 0) - entry.get("start_ms", 0),
-                    subtitle_text=entry.get("text", ""),
-                ))
+                scenes.append(
+                    VideoScene(
+                        scene_id=f"scene_{i + 1}",
+                        title=f"Scene {i + 1}",
+                        narration_text=entry.get("text", ""),
+                        visual_description=entry.get("text", "")[:100],
+                        duration_ms=entry.get("end_ms", 0) - entry.get("start_ms", 0),
+                        subtitle_text=entry.get("text", ""),
+                    )
+                )
         elif isinstance(script, str):
             paragraphs = [p.strip() for p in script.split("\n\n") if p.strip()]
             avg_duration = 8000  # 8 seconds per scene
             for i, para in enumerate(paragraphs[:20]):
-                scenes.append(VideoScene(
-                    scene_id=f"scene_{i+1}",
-                    title=f"Scene {i+1}",
-                    narration_text=para,
-                    visual_description=para[:100],
-                    duration_ms=avg_duration,
-                    subtitle_text=para[:200],
-                ))
+                scenes.append(
+                    VideoScene(
+                        scene_id=f"scene_{i + 1}",
+                        title=f"Scene {i + 1}",
+                        narration_text=para,
+                        visual_description=para[:100],
+                        duration_ms=avg_duration,
+                        subtitle_text=para[:200],
+                    )
+                )
 
-        return scenes or [VideoScene(
-            scene_id="scene_1",
-            title="Introduction",
-            narration_text=str(script)[:500],
-            visual_description="Title card",
-            duration_ms=5000,
-        )]
+        return scenes or [
+            VideoScene(
+                scene_id="scene_1",
+                title="Introduction",
+                narration_text=str(script)[:500],
+                visual_description="Title card",
+                duration_ms=5000,
+            )
+        ]
 
     async def _compose_with_moviepy(
         self,
         scenes: list[VideoScene],
-        audio_data: Optional[bytes],
+        audio_data: bytes | None,
         config: VideoConfig,
     ) -> VideoResult:
         """Full video composition using moviepy."""
         from moviepy.editor import (
-            TextClip, CompositeVideoClip, concatenate_videoclips,
-            AudioFileClip, ColorClip,
+            AudioFileClip,
+            ColorClip,
+            CompositeVideoClip,
+            TextClip,
+            concatenate_videoclips,
         )
 
         clips = []
@@ -164,13 +174,17 @@ class VideoEngine:
                 duration=duration_s,
             )
 
-            text = TextClip(
-                scene.subtitle_text[:150] or scene.narration_text[:150],
-                fontsize=config.font_size,
-                color=config.text_color,
-                size=(config.resolution[0] - 200, None),
-                method="caption",
-            ).set_duration(duration_s).set_position("center")
+            text = (
+                TextClip(
+                    scene.subtitle_text[:150] or scene.narration_text[:150],
+                    fontsize=config.font_size,
+                    color=config.text_color,
+                    size=(config.resolution[0] - 200, None),
+                    method="caption",
+                )
+                .set_duration(duration_s)
+                .set_position("center")
+            )
 
             clip = CompositeVideoClip([bg, text])
             clips.append(clip)
@@ -214,7 +228,7 @@ class VideoEngine:
         slides_html = []
         for i, scene in enumerate(scenes):
             slides_html.append(f"""
-            <div class="slide" id="slide-{i}" style="display:{'flex' if i == 0 else 'none'}">
+            <div class="slide" id="slide-{i}" style="display:{"flex" if i == 0 else "none"}">
                 <h2>{scene.title}</h2>
                 <p>{scene.narration_text[:300]}</p>
             </div>""")
@@ -255,10 +269,25 @@ document.addEventListener('keydown', e => {{ if(e.key==='ArrowRight')next(); if(
             "scenes": len(scenes),
         }
 
+    # Backward-compatible public wrappers expected by older tests/callers.
+    async def generate_html_slideshow(
+        self,
+        scenes: list[VideoScene],
+        config: VideoConfig,
+    ) -> dict[str, Any]:
+        return await self._compose_html_slideshow(scenes, config)
+
+    async def _generate_html_slideshow(
+        self,
+        scenes: list[VideoScene],
+        config: VideoConfig,
+    ) -> dict[str, Any]:
+        return await self._compose_html_slideshow(scenes, config)
+
     @staticmethod
     def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         h = hex_color.lstrip("#")
-        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
     # Public alias so callers and tests can discover the HTML slideshow fallback
     generate_html_slideshow = _compose_html_slideshow

@@ -15,22 +15,25 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from src.exceptions import AuthError
-from src.infra.nexus_obs_tracing import traced, trace_id_var, generate_trace_id
+from src.infra.nexus_ws_broker import ws_broker
 
 router = APIRouter(tags=["WebSocket"])
 
+MAX_CONNECTIONS_PER_USER = 5
 
 # ── Connection Manager ───────────────────────────────────────
+
 
 @dataclass
 class ActiveConnection:
     """Represents an active WebSocket connection."""
+
     websocket: WebSocket
     user_id: str
     tenant_id: str
@@ -39,7 +42,13 @@ class ActiveConnection:
 
 
 class ConnectionManager:
-    """Manages WebSocket connections per user and tenant."""
+    """
+    Manages WebSocket connections per user and tenant.
+
+    Local state (self._connections) is the source of truth for
+    connections on *this* worker.  Cross-worker event relay is
+    handled by publishing to Redis via ws_broker.
+    """
 
     def __init__(self) -> None:
         self._connections: dict[str, ActiveConnection] = {}
@@ -52,8 +61,13 @@ class ConnectionManager:
         user_id: str,
         tenant_id: str,
         session_id: str = "",
-    ) -> str:
+    ) -> str | None:
         """Accept and register a WebSocket connection."""
+        existing = self._user_connections.get(user_id, [])
+        if len(existing) >= MAX_CONNECTIONS_PER_USER:
+            await websocket.close(code=4008, reason="Connection limit reached")
+            return None
+
         await websocket.accept()
         conn_id = str(uuid.uuid4())[:12]
 
@@ -64,37 +78,42 @@ class ConnectionManager:
             session_id=session_id,
         )
 
-        # Track by user
         if user_id not in self._user_connections:
             self._user_connections[user_id] = []
         self._user_connections[user_id].append(conn_id)
 
-        # Track by tenant
         if tenant_id not in self._tenant_connections:
             self._tenant_connections[tenant_id] = []
         self._tenant_connections[tenant_id].append(conn_id)
+
+        async def _user_relay(msg: dict[str, Any], uid: str = user_id) -> None:
+            await self._relay_to_local_user(uid, msg)
+
+        async def _tenant_relay(msg: dict[str, Any], tid: str = tenant_id) -> None:
+            await self._relay_to_local_tenant(tid, msg)
+
+        await ws_broker.subscribe(f"user:{user_id}", _user_relay)
+        await ws_broker.subscribe(f"tenant:{tenant_id}", _tenant_relay)
 
         logger.info(f"WebSocket connected: {conn_id}", user_id=user_id, tenant_id=tenant_id)
         return conn_id
 
     def disconnect(self, conn_id: str) -> None:
-        """Remove a WebSocket connection."""
+        """Remove a local WebSocket connection."""
         conn = self._connections.pop(conn_id, None)
         if conn:
-            # Remove from user tracking
             if conn.user_id in self._user_connections:
                 self._user_connections[conn.user_id] = [
                     c for c in self._user_connections[conn.user_id] if c != conn_id
                 ]
-            # Remove from tenant tracking
             if conn.tenant_id in self._tenant_connections:
                 self._tenant_connections[conn.tenant_id] = [
                     c for c in self._tenant_connections[conn.tenant_id] if c != conn_id
                 ]
             logger.info(f"WebSocket disconnected: {conn_id}")
 
-    async def send_to_connection(self, conn_id: str, data: dict) -> None:
-        """Send data to a specific connection."""
+    async def send_to_connection(self, conn_id: str, data: dict[str, Any]) -> None:
+        """Send data to a specific local connection."""
         conn = self._connections.get(conn_id)
         if conn:
             try:
@@ -103,15 +122,23 @@ class ConnectionManager:
                 logger.warning(f"Failed to send to {conn_id}: {e}")
                 self.disconnect(conn_id)
 
-    async def send_to_user(self, user_id: str, data: dict) -> None:
-        """Send data to all connections of a user."""
-        conn_ids = self._user_connections.get(user_id, [])
+    async def send_to_user(self, user_id: str, data: dict[str, Any]) -> None:
+        """Publish to Redis so all workers relay to the user's connections."""
+        await ws_broker.publish(f"user:{user_id}", data)
+
+    async def broadcast_to_tenant(self, tenant_id: str, data: dict[str, Any]) -> None:
+        """Publish to Redis so all workers relay to the tenant's connections."""
+        await ws_broker.publish(f"tenant:{tenant_id}", data)
+
+    async def _relay_to_local_user(self, user_id: str, data: dict[str, Any]) -> None:
+        """Relay a Redis message to local WebSocket connections for a user."""
+        conn_ids = list(self._user_connections.get(user_id, []))
         for conn_id in conn_ids:
             await self.send_to_connection(conn_id, data)
 
-    async def broadcast_to_tenant(self, tenant_id: str, data: dict) -> None:
-        """Broadcast data to all connections in a tenant."""
-        conn_ids = self._tenant_connections.get(tenant_id, [])
+    async def _relay_to_local_tenant(self, tenant_id: str, data: dict[str, Any]) -> None:
+        """Relay a Redis message to local WebSocket connections for a tenant."""
+        conn_ids = list(self._tenant_connections.get(tenant_id, []))
         for conn_id in conn_ids:
             await self.send_to_connection(conn_id, data)
 
@@ -120,30 +147,32 @@ class ConnectionManager:
         return len(self._connections)
 
 
-# Global connection manager
 manager = ConnectionManager()
 
 
 # ── Authentication ───────────────────────────────────────────
 
+
 def authenticate_websocket(token: str) -> tuple[str, str]:
     """Authenticate WebSocket connection and return (user_id, tenant_id)."""
     from src.infra.nexus_vault_keys import verify_token
+
     try:
         payload = verify_token(token)
         return payload["sub"], payload["tid"]
     except Exception as e:
-        raise AuthError(f"WebSocket auth failed: {e}")
+        raise AuthError(f"WebSocket auth failed: {e}") from e
 
 
 # ── WebSocket Endpoints ──────────────────────────────────────
+
 
 @router.websocket("/ws/chat")
 async def websocket_chat(
     websocket: WebSocket,
     token: str = Query(...),
-    session_id: Optional[str] = Query(None),
-):
+    session_id: str | None = Query(None),
+) -> None:
     """
     WebSocket endpoint for real-time chat streaming.
 
@@ -162,14 +191,18 @@ async def websocket_chat(
         return
 
     conn_id = await manager.connect(websocket, user_id, tenant_id, session_id or "")
+    if conn_id is None:
+        return
 
     try:
         # Send connection acknowledgment
-        await websocket.send_json({
-            "type": "connected",
-            "connection_id": conn_id,
-            "user_id": user_id,
-        })
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "connection_id": conn_id,
+                "user_id": user_id,
+            }
+        )
 
         while True:
             # Receive message from client
@@ -195,10 +228,12 @@ async def websocket_chat(
                     conn = manager._connections.get(conn_id)
                     if conn:
                         conn.session_id = f"artifact:{artifact_id}"
-                    await websocket.send_json({
-                        "type": "subscribed",
-                        "artifact_id": artifact_id,
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "subscribed",
+                            "artifact_id": artifact_id,
+                        }
+                    )
 
     except WebSocketDisconnect:
         manager.disconnect(conn_id)
@@ -208,7 +243,10 @@ async def websocket_chat(
         try:
             await websocket.close(code=1011, reason="Internal error")
         except Exception:
-            pass
+            logger.warning(
+                "WebSocket close failed after error (connection may already be closed)",
+                exc_info=True,
+            )
 
 
 async def _handle_chat_message(
@@ -216,14 +254,16 @@ async def _handle_chat_message(
     data: dict,
     user_id: str,
     tenant_id: str,
-    session_id: Optional[str],
+    session_id: str | None,
 ) -> None:
     """Process a chat message and stream the response."""
-    from src.agents.nexus_model_layer import model_manager
-    from src.infra.nexus_prompt_registry import prompt_registry
-    from src.infra.nexus_cost_tracker import cost_tracker, UsageRecord
-    from src.infra.nexus_data_persist import get_session as db_session, sessions_repo, sources_repo
     from sqlalchemy import text
+
+    from src.agents.nexus_model_layer import model_manager
+    from src.infra.nexus_cost_tracker import UsageRecord, cost_tracker
+    from src.infra.nexus_data_persist import get_session as db_session
+    from src.infra.nexus_data_persist import sessions_repo, sources_repo
+    from src.infra.nexus_prompt_registry import prompt_registry
 
     content = data.get("content", "")
     notebook_id = data.get("notebook_id")
@@ -263,7 +303,9 @@ async def _handle_chat_message(
                     source_ids = [row["source_id"] for row in result.mappings().all()]
 
                 if source_ids:
-                    embedding_provider = await model_manager.provision_embedding(tenant_id=tenant_id)
+                    embedding_provider = await model_manager.provision_embedding(
+                        tenant_id=tenant_id
+                    )
                     embedding_result = await embedding_provider.embed([content])
                     chunks = await sources_repo.vector_search(
                         query_embedding=embedding_result.embeddings[0],
@@ -277,7 +319,8 @@ async def _handle_chat_message(
 
         # 3. Build messages
         prompt_result = await prompt_registry.resolve(
-            "chat", "system",
+            "chat",
+            "system",
             variables={"context": context_text},
         )
 
@@ -307,14 +350,16 @@ async def _handle_chat_message(
         token_count = 0
         start_time = time.perf_counter()
 
-        async for token in llm.stream(messages, temperature=0.7):
+        async for token in llm.stream(messages, temperature=0.7):  # type: ignore[attr-defined]
             full_response += token
             token_count += 1
-            await websocket.send_json({
-                "type": "token",
-                "content": token,
-                "token_index": token_count,
-            })
+            await websocket.send_json(
+                {
+                    "type": "token",
+                    "content": token,
+                    "token_index": token_count,
+                }
+            )
 
         latency_ms = (time.perf_counter() - start_time) * 1000
 
@@ -347,36 +392,43 @@ async def _handle_chat_message(
             )
 
         # 6. Send completion message
-        await websocket.send_json({
-            "type": "done",
-            "session_id": session_id,
-            "turn_number": turn,
-            "output_tokens": token_count,
-            "latency_ms": round(latency_ms, 2),
-            "model": llm.config.model_id_string,
-        })
+        await websocket.send_json(
+            {
+                "type": "done",
+                "session_id": session_id,
+                "turn_number": turn,
+                "output_tokens": token_count,
+                "latency_ms": round(latency_ms, 2),
+                "model": llm.config.model_id_string,
+            }
+        )
 
         # 7. Record usage
-        await cost_tracker.record_usage(UsageRecord(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            model_name=llm.config.model_id_string,
-            provider=llm.config.provider.value,
-            feature_id="2A",
-            agent_id="chat_ws",
-            output_tokens=token_count,
-            latency_ms=latency_ms,
-        ))
+        await cost_tracker.record_usage(
+            UsageRecord(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                model_name=llm.config.model_id_string,
+                provider=llm.config.provider.value,
+                feature_id="2A",
+                agent_id="chat_ws",
+                output_tokens=token_count,
+                latency_ms=latency_ms,
+            )
+        )
 
     except Exception as e:
         logger.error(f"Chat streaming error: {e}")
-        await websocket.send_json({
-            "type": "error",
-            "message": "An error occurred while generating the response.",
-        })
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "An error occurred while generating the response.",
+            }
+        )
 
 
 # ── Artifact Progress Updates ────────────────────────────────
+
 
 async def notify_artifact_progress(
     tenant_id: str,
@@ -386,17 +438,20 @@ async def notify_artifact_progress(
     message: str = "",
 ) -> None:
     """Send artifact generation progress to subscribed WebSocket clients."""
-    await manager.broadcast_to_tenant(tenant_id, {
-        "type": "artifact_progress",
-        "artifact_id": artifact_id,
-        "status": status,
-        "progress_pct": progress_pct,
-        "message": message,
-    })
+    await manager.broadcast_to_tenant(
+        tenant_id,
+        {
+            "type": "artifact_progress",
+            "artifact_id": artifact_id,
+            "status": status,
+            "progress_pct": progress_pct,
+            "message": message,
+        },
+    )
 
 
 @router.get("/ws/status")
-async def websocket_status():
+async def websocket_status() -> dict[str, Any]:
     """Get WebSocket connection statistics."""
     return {
         "active_connections": manager.active_count,

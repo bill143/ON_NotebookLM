@@ -15,17 +15,18 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, TypedDict
+from typing import Any, cast
 
 from loguru import logger
 
 from src.exceptions import ChainExecutionError
-from src.infra.nexus_obs_tracing import traced, trace_id_var
-
+from src.infra.nexus_obs_tracing import trace_id_var, traced
 
 # ── Chain Definitions ────────────────────────────────────────
+
 
 class CompensationStrategy(str, Enum):
     RETRY = "retry"
@@ -45,16 +46,18 @@ class AgentStatus(str, Enum):
 @dataclass
 class AgentResult:
     """Result of a single agent execution."""
+
     agent_id: str
     status: AgentStatus
     output: Any = None
-    error: Optional[str] = None
+    error: str | None = None
     duration_ms: float = 0.0
 
 
 @dataclass
 class ChainState:
     """State passed between agents in a chain."""
+
     chain_id: str = ""
     trace_id: str = ""
     tenant_id: str = ""
@@ -70,16 +73,18 @@ class ChainState:
 @dataclass
 class ChainStep:
     """Definition of a single step in a chain."""
+
     agent_id: str
     handler: Callable
     timeout_seconds: float = 300.0
     compensation: CompensationStrategy = CompensationStrategy.EMIT_PARTIAL
     max_retries: int = 2
     depends_on: list[str] = field(default_factory=list)
-    parallel_group: Optional[str] = None
+    parallel_group: str | None = None
 
 
 # ── Agent Registry ───────────────────────────────────────────
+
 
 class AgentRegistry:
     """
@@ -113,13 +118,11 @@ class AgentRegistry:
     @classmethod
     def list_agents(cls) -> list[dict[str, Any]]:
         """List all registered agents."""
-        return [
-            {"agent_id": k, **v["metadata"]}
-            for k, v in cls._agents.items()
-        ]
+        return [{"agent_id": k, **v["metadata"]} for k, v in cls._agents.items()]
 
 
 # ── Chain Executor ───────────────────────────────────────────
+
 
 class ChainExecutor:
     """
@@ -147,7 +150,7 @@ class ChainExecutor:
         state.total_steps = len(steps)
 
         logger.info(
-            f"Starting chain execution",
+            "Starting chain execution",
             chain_id=state.chain_id,
             steps=len(steps),
         )
@@ -155,7 +158,7 @@ class ChainExecutor:
         # Group steps by parallel group
         step_groups: list[list[ChainStep]] = []
         current_group: list[ChainStep] = []
-        current_group_name: Optional[str] = None
+        current_group_name: str | None = None
 
         for step in steps:
             if step.parallel_group != current_group_name:
@@ -189,15 +192,15 @@ class ChainExecutor:
                 tasks = [self._execute_step(step, state) for step in group]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                for step, result in zip(group, results):
-                    if isinstance(result, Exception):
+                for step, raw in zip(group, results, strict=True):
+                    if isinstance(raw, Exception):
                         agent_result = AgentResult(
                             agent_id=step.agent_id,
                             status=AgentStatus.FAILED,
-                            error=str(result),
+                            error=str(raw),
                         )
                     else:
-                        agent_result = result
+                        agent_result = cast(AgentResult, raw)
 
                     state.agent_results.append(agent_result)
                     state.current_step += 1
@@ -206,7 +209,7 @@ class ChainExecutor:
                         state.outputs[agent_result.agent_id] = agent_result.output
 
         logger.info(
-            f"Chain execution completed",
+            "Chain execution completed",
             chain_id=state.chain_id,
             completed=sum(1 for r in state.agent_results if r.status == AgentStatus.COMPLETED),
             failed=sum(1 for r in state.agent_results if r.status == AgentStatus.FAILED),
@@ -243,7 +246,7 @@ class ChainExecutor:
                     duration_ms=duration,
                 )
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 duration = (time.perf_counter() - start) * 1000
                 logger.warning(
                     f"Agent timed out: {step.agent_id}",
@@ -274,7 +277,7 @@ class ChainExecutor:
                     )
 
                 # Exponential backoff before retry
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
 
         # Should not reach here
         return AgentResult(
@@ -291,35 +294,38 @@ class ChainExecutor:
     ) -> None:
         """Handle step failure according to compensation strategy."""
         if step.compensation == CompensationStrategy.DEAD_LETTER:
-            self._dead_letter_queue.append({
-                "chain_id": state.chain_id,
-                "failed_agent": step.agent_id,
-                "error": result.error,
-                "state_snapshot": {
-                    "inputs": state.inputs,
-                    "outputs": state.outputs,
-                    "current_step": state.current_step,
-                },
-                "timestamp": time.time(),
-            })
-
-            from src.infra.nexus_obs_tracing import metrics
-            metrics.queue_depth.labels(queue_name="dead_letter").set(
-                len(self._dead_letter_queue)
+            self._dead_letter_queue.append(
+                {
+                    "chain_id": state.chain_id,
+                    "failed_agent": step.agent_id,
+                    "error": result.error,
+                    "state_snapshot": {
+                        "inputs": state.inputs,
+                        "outputs": state.outputs,
+                        "current_step": state.current_step,
+                    },
+                    "timestamp": time.time(),
+                }
             )
 
+            from src.infra.nexus_obs_tracing import metrics
+
+            metrics.queue_depth.labels(queue_name="dead_letter").set(len(self._dead_letter_queue))
+
             logger.error(
-                f"Chain moved to dead-letter queue",
+                "Chain moved to dead-letter queue",
                 chain_id=state.chain_id,
                 failed_agent=step.agent_id,
             )
 
         elif step.compensation == CompensationStrategy.EMIT_PARTIAL:
             logger.warning(
-                f"Emitting partial results after failure",
+                "Emitting partial results after failure",
                 chain_id=state.chain_id,
                 failed_agent=step.agent_id,
-                completed_agents=[r.agent_id for r in state.agent_results if r.status == AgentStatus.COMPLETED],
+                completed_agents=[
+                    r.agent_id for r in state.agent_results if r.status == AgentStatus.COMPLETED
+                ],
             )
 
     def get_dead_letter_count(self) -> int:
@@ -327,6 +333,7 @@ class ChainExecutor:
 
 
 # ── Predefined Chains ───────────────────────────────────────
+
 
 class Chains:
     """

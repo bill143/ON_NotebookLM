@@ -13,21 +13,22 @@ Provides:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
-
+from typing import Any
 
 # ── Keyboard Shortcuts ───────────────────────────────────────
+
 
 @dataclass
 class KeyboardShortcut:
     """A registered keyboard shortcut."""
-    key: str                    # "k", "n", "/"
-    modifiers: list[str]        # ["ctrl"], ["ctrl","shift"], ["meta"]
-    action: str                 # "search", "new_notebook", "focus_chat"
-    label: str                  # Human-readable label
-    category: str = "general"   # "general", "navigation", "editing", "chat"
-    when: str = "always"        # "always", "notebook_open", "chat_focused"
-    platform_override: Optional[dict[str, str]] = None  # {"mac": "meta", "win": "ctrl"}
+
+    key: str  # "k", "n", "/"
+    modifiers: list[str]  # ["ctrl"], ["ctrl","shift"], ["meta"]
+    action: str  # "search", "new_notebook", "focus_chat"
+    label: str  # Human-readable label
+    category: str = "general"  # "general", "navigation", "editing", "chat"
+    when: str = "always"  # "always", "notebook_open", "chat_focused"
+    platform_override: dict[str, str] | None = None  # {"mac": "meta", "win": "ctrl"}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,21 +52,19 @@ DEFAULT_SHORTCUTS: list[KeyboardShortcut] = [
     KeyboardShortcut("2", ["ctrl"], "tab_chat", "Chat tab", "navigation"),
     KeyboardShortcut("3", ["ctrl"], "tab_studio", "Studio tab", "navigation"),
     KeyboardShortcut("4", ["ctrl"], "tab_notes", "Notes tab", "navigation"),
-
     # Chat
     KeyboardShortcut("/", [], "focus_chat", "Focus chat input", "chat", "notebook_open"),
     KeyboardShortcut("Enter", ["shift"], "send_message", "Send message", "chat", "chat_focused"),
     KeyboardShortcut("l", ["ctrl"], "clear_chat", "New chat session", "chat", "chat_focused"),
-
     # Editing
     KeyboardShortcut("s", ["ctrl"], "save", "Save", "editing"),
     KeyboardShortcut("z", ["ctrl"], "undo", "Undo", "editing"),
     KeyboardShortcut("z", ["ctrl", "shift"], "redo", "Redo", "editing"),
-
     # Studio
-    KeyboardShortcut("g", ["ctrl", "shift"], "generate_artifact", "Generate artifact", "studio", "notebook_open"),
+    KeyboardShortcut(
+        "g", ["ctrl", "shift"], "generate_artifact", "Generate artifact", "studio", "notebook_open"
+    ),
     KeyboardShortcut("e", ["ctrl", "shift"], "export", "Export", "studio", "notebook_open"),
-
     # General
     KeyboardShortcut("p", ["ctrl", "shift"], "command_palette", "Command palette", "general"),
     KeyboardShortcut(",", ["ctrl"], "open_settings", "Settings", "general"),
@@ -75,9 +74,11 @@ DEFAULT_SHORTCUTS: list[KeyboardShortcut] = [
 
 # ── Command Palette ──────────────────────────────────────────
 
+
 @dataclass
 class CommandPaletteItem:
     """An item in the command palette."""
+
     id: str
     label: str
     description: str = ""
@@ -100,36 +101,63 @@ class CommandPaletteItem:
 
 
 DEFAULT_COMMANDS: list[CommandPaletteItem] = [
-    CommandPaletteItem("new_notebook", "New Notebook", "Create a new notebook", "📓", "Ctrl+N", "Create"),
-    CommandPaletteItem("new_source_text", "Add Text Source", "Paste text as a source", "📝", "", "Create"),
+    CommandPaletteItem(
+        "new_notebook", "New Notebook", "Create a new notebook", "📓", "Ctrl+N", "Create"
+    ),
+    CommandPaletteItem(
+        "new_source_text", "Add Text Source", "Paste text as a source", "📝", "", "Create"
+    ),
     CommandPaletteItem("new_source_url", "Add URL Source", "Import from URL", "🔗", "", "Create"),
     CommandPaletteItem("new_source_upload", "Upload File", "Upload PDF/DOCX", "📤", "", "Create"),
-    CommandPaletteItem("generate_summary", "Generate Summary", "Create a summary artifact", "📄", "", "Studio"),
-    CommandPaletteItem("generate_podcast", "Generate Podcast", "Create podcast audio", "🎙️", "", "Studio"),
+    CommandPaletteItem(
+        "generate_summary", "Generate Summary", "Create a summary artifact", "📄", "", "Studio"
+    ),
+    CommandPaletteItem(
+        "generate_podcast", "Generate Podcast", "Create podcast audio", "🎙️", "", "Studio"
+    ),
     CommandPaletteItem("generate_quiz", "Generate Quiz", "Create a quiz", "❓", "", "Studio"),
-    CommandPaletteItem("generate_flashcards", "Generate Flashcards", "Create FSRS flashcards", "🃏", "", "Studio"),
-    CommandPaletteItem("export_pdf", "Export as PDF", "Export current artifact as PDF", "📄", "Ctrl+Shift+E", "Export"),
-    CommandPaletteItem("export_docx", "Export as DOCX", "Export as Word document", "📝", "", "Export"),
+    CommandPaletteItem(
+        "generate_flashcards", "Generate Flashcards", "Create FSRS flashcards", "🃏", "", "Studio"
+    ),
+    CommandPaletteItem(
+        "export_pdf",
+        "Export as PDF",
+        "Export current artifact as PDF",
+        "📄",
+        "Ctrl+Shift+E",
+        "Export",
+    ),
+    CommandPaletteItem(
+        "export_docx", "Export as DOCX", "Export as Word document", "📝", "", "Export"
+    ),
     CommandPaletteItem("export_epub", "Export as EPUB", "Export for e-readers", "📖", "", "Export"),
-    CommandPaletteItem("toggle_dark_mode", "Toggle Dark Mode", "Switch theme", "🌙", "", "Settings"),
-    CommandPaletteItem("open_settings", "Settings", "Open application settings", "⚙️", "Ctrl+,", "Settings"),
-    CommandPaletteItem("show_shortcuts", "Keyboard Shortcuts", "View all shortcuts", "⌨️", "Ctrl+Shift+?", "Help"),
+    CommandPaletteItem(
+        "toggle_dark_mode", "Toggle Dark Mode", "Switch theme", "🌙", "", "Settings"
+    ),
+    CommandPaletteItem(
+        "open_settings", "Settings", "Open application settings", "⚙️", "Ctrl+,", "Settings"
+    ),
+    CommandPaletteItem(
+        "show_shortcuts", "Keyboard Shortcuts", "View all shortcuts", "⌨️", "Ctrl+Shift+?", "Help"
+    ),
 ]
 
 
 # ── Toast Notification ───────────────────────────────────────
 
+
 @dataclass
 class ToastPayload:
     """Server-side toast notification payload for frontend consumption."""
-    type: str               # "success", "error", "warning", "info", "loading"
+
+    type: str  # "success", "error", "warning", "info", "loading"
     title: str
     description: str = ""
     duration_ms: int = 5000
-    action_label: Optional[str] = None
-    action_url: Optional[str] = None
+    action_label: str | None = None
+    action_url: str | None = None
     dismissable: bool = True
-    icon: Optional[str] = None
+    icon: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -165,7 +193,9 @@ class Toast:
 
     @staticmethod
     def loading(title: str, description: str = "") -> ToastPayload:
-        return ToastPayload("loading", title, description, duration_ms=0, dismissable=False, icon="⏳")
+        return ToastPayload(
+            "loading", title, description, duration_ms=0, dismissable=False, icon="⏳"
+        )
 
 
 # ── Error Boundary Definitions ───────────────────────────────
@@ -234,6 +264,7 @@ THEMES = {
 
 # ── Shell Configuration API ──────────────────────────────────
 
+
 def get_shell_config() -> dict[str, Any]:
     """Get complete UI shell configuration for the frontend."""
     return {
@@ -245,6 +276,7 @@ def get_shell_config() -> dict[str, Any]:
 
 
 class UIShell:
+<<<<<<< HEAD
     """Facade for UI shell utilities: shortcuts, commands, toasts, and themes."""
 
     @staticmethod
@@ -267,3 +299,10 @@ class UIShell:
     @staticmethod
     def toast_info(title: str, description: str = "") -> ToastPayload:
         return Toast.info(title, description)
+=======
+    """Compatibility facade for callers expecting a UIShell class."""
+
+    @staticmethod
+    def get_config() -> dict[str, Any]:
+        return get_shell_config()
+>>>>>>> origin/main

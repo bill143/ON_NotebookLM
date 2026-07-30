@@ -8,17 +8,16 @@ Handles: Multi-turn research with source grounding and citation chains.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
-from loguru import logger
-
+from src.infra.nexus_cost_tracker import UsageRecord, cost_tracker
 from src.infra.nexus_obs_tracing import traced
-from src.infra.nexus_cost_tracker import cost_tracker, UsageRecord
 
 
 @dataclass
 class Citation:
     """A citation reference (Repo #5 pattern: source_id + cited_text + char offsets)."""
+
     source_id: str
     source_title: str
     cited_text: str
@@ -34,10 +33,11 @@ async def deep_research(state: Any) -> dict[str, Any]:
     3. Generate answer with inline citations
     4. Extract citation references
     """
-    from src.agents.nexus_model_layer import model_manager
-    from src.infra.nexus_prompt_registry import prompt_registry
-    from src.infra.nexus_data_persist import sources_repo, get_session
     from sqlalchemy import text
+
+    from src.agents.nexus_model_layer import model_manager
+    from src.infra.nexus_data_persist import get_session, sources_repo
+    from src.infra.nexus_prompt_registry import prompt_registry
 
     query = state.inputs.get("query", "")
     source_ids = state.inputs.get("source_ids", [])
@@ -77,20 +77,26 @@ async def deep_research(state: Any) -> dict[str, Any]:
             source_title = source_data.get("title", "Unknown") if source_data else "Unknown"
 
             context_chunks.append(f"[Source: {source_title}]\n{chunk['content']}")
-            citations.append({
-                "source_id": chunk["source_id"],
-                "source_title": source_title,
-                "cited_text": chunk["content"][:200],
-                "relevance_score": chunk.get("score", 0),
-            })
+            citations.append(
+                {
+                    "source_id": chunk["source_id"],
+                    "source_title": source_title,
+                    "cited_text": chunk["content"][:200],
+                    "relevance_score": chunk.get("score", 0),
+                }
+            )
 
     # 3. Build grounded prompt
     context_text = "\n\n---\n\n".join(context_chunks) if context_chunks else "No sources available."
 
     prompt = await prompt_registry.resolve(
-        "research", "grounding",
+        "research",
+        "grounding",
         variables={
-            "sources": [{"title": c.get("source_title", ""), "context": c.get("cited_text", "")} for c in citations],
+            "sources": [
+                {"title": c.get("source_title", ""), "context": c.get("cited_text", "")}
+                for c in citations
+            ],
         },
     )
 
@@ -103,22 +109,24 @@ async def deep_research(state: Any) -> dict[str, Any]:
     llm = await model_manager.provision_llm(task_type="research", tenant_id=tenant_id)
     response = await llm.generate(messages, temperature=0.3)
 
-    await cost_tracker.record_usage(UsageRecord(
-        tenant_id=tenant_id,
-        user_id=state.user_id,
-        model_name=response.model,
-        provider=response.provider,
-        feature_id="2A",
-        agent_id="researcher",
-        input_tokens=response.input_tokens,
-        output_tokens=response.output_tokens,
-        cost_usd=response.cost_usd,
-        latency_ms=response.latency_ms,
-    ))
+    await cost_tracker.record_usage(
+        UsageRecord(
+            tenant_id=tenant_id,
+            user_id=state.user_id,
+            model_name=response.model,
+            provider=response.provider,
+            feature_id="2A",
+            agent_id="researcher",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            latency_ms=response.latency_ms,
+        )
+    )
 
     return {
         "answer": response.content,
         "citations": citations,
-        "sources_used": len(set(c["source_id"] for c in citations)),
+        "sources_used": len({c["source_id"] for c in citations}),
         "model": response.model,
     }

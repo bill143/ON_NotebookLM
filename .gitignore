@@ -55,3 +55,4 @@ bandit-results.json
 celerybeat-schedule
 *.db
 storage/
+deploy/backups/*.dump

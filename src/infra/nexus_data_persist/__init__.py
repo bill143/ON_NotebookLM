@@ -12,13 +12,14 @@ Provides:
 
 from __future__ import annotations
 
+import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Any, Generic, Optional, Sequence, TypeVar
+from datetime import UTC, datetime
+from typing import Any, TypeVar
 
 from loguru import logger
-from sqlalchemy import MetaData, text, select, update, delete, func, and_
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -26,15 +27,15 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from src.config import get_settings
-from src.exceptions import DatabaseError, NotFoundError, TransactionConflictError
+from src.config import Environment, get_settings
+from src.exceptions import DatabaseError, TransactionConflictError
 
 T = TypeVar("T")
 
 # ── Engine & Session Factory ─────────────────────────────────
 
-_engine: Optional[AsyncEngine] = None
-_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 async def init_database() -> None:
@@ -42,6 +43,13 @@ async def init_database() -> None:
     global _engine, _session_factory
 
     settings = get_settings()
+    connect_args: dict[str, Any] = {}
+    if settings.environment == Environment.TESTING and settings.database_url.startswith(
+        "postgresql+asyncpg"
+    ):
+        # Fail fast when Postgres is down (local integration runs / CI), instead of long TCP hangs.
+        connect_args["timeout"] = 10
+
     _engine = create_async_engine(
         settings.database_url,
         pool_size=settings.database_pool_size,
@@ -49,6 +57,7 @@ async def init_database() -> None:
         echo=settings.database_echo,
         pool_pre_ping=True,
         pool_recycle=3600,
+        connect_args=connect_args,
     )
     _session_factory = async_sessionmaker(
         _engine,
@@ -76,22 +85,42 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @asynccontextmanager
-async def get_session(tenant_id: Optional[str] = None):
+async def get_session(tenant_id: str | None = None):
     """
     Get a database session with optional tenant context.
 
     If tenant_id is provided, sets the app.tenant_id session variable
     for PostgreSQL Row-Level Security enforcement.
+
+    Safety guardrails applied to every session:
+    - statement_timeout: 30 s — prevents runaway queries from holding
+      connections indefinitely (vector search, full-text, AI-generated SQL).
+    - idle_in_transaction_session_timeout: 60 s — auto-kills sessions that
+      open a transaction and then stall (e.g. awaiting an external API call
+      inside a ``async with get_session()`` block).
     """
     factory = get_session_factory()
     session = factory()
 
     try:
+        await session.execute(text("SET LOCAL statement_timeout = '30000'"))
+        await session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '60000'"))
+
         if tenant_id:
+<<<<<<< HEAD
             await session.execute(
                 text("SET LOCAL app.tenant_id = :tid"),
                 {"tid": tenant_id},
             )
+=======
+            # SET does not support $1 bind parameters in PostgreSQL.
+            # tenant_id comes from a verified JWT (AuthContext), not
+            # user input, so quoting it as a literal is safe here.
+            import re
+
+            safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", tenant_id)
+            await session.execute(text(f"SET LOCAL app.tenant_id = '{safe_tid}'"))
+>>>>>>> origin/main
 
         yield session
         await session.commit()
@@ -102,13 +131,42 @@ async def get_session(tenant_id: Optional[str] = None):
             raise TransactionConflictError(
                 "Transaction conflict — please retry",
                 original_error=e,
-            )
-        raise DatabaseError(str(e), original_error=e)
+            ) from e
+        raise DatabaseError(str(e), original_error=e) from e
     finally:
         await session.close()
 
 
 # ── Base Repository ──────────────────────────────────────────
+
+_SAFE_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*$")
+_SAFE_ORDER_BY = re.compile(
+    r"^[a-z_][a-z0-9_]*\s*(?:ASC|DESC)?$",
+    re.IGNORECASE,
+)
+
+
+def _validate_identifier(name: str) -> str:
+    """Reject anything that isn't a simple column name."""
+    if not _SAFE_IDENTIFIER.match(name):
+        raise DatabaseError(f"Invalid identifier: {name!r}")
+    return name
+
+
+def _validate_order_clause(clause: str) -> str:
+    """Validate an ORDER BY clause like 'created_at DESC'."""
+    for part in clause.split(","):
+        if not _SAFE_ORDER_BY.match(part.strip()):
+            raise DatabaseError(f"Invalid order_by clause: {clause!r}")
+    return clause
+
+
+def _stringify_uuids(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert UUID values to strings so Pydantic response models work."""
+    from uuid import UUID as _UUID
+
+    return {k: str(v) if isinstance(v, _UUID) else v for k, v in row.items()}
+
 
 class BaseRepository:
     """
@@ -121,33 +179,56 @@ class BaseRepository:
     - Soft delete support
     """
 
+    # Tables that support soft-delete (have deleted_at column)
+    _SOFT_DELETE_TABLES = frozenset(
+        {
+            "artifacts",
+            "notebooks",
+            "notes",
+            "sources",
+            "tenants",
+            "users",
+        }
+    )
+
+    # Tables that don't have an updated_at column
+    _NO_UPDATED_AT = frozenset({"audit_logs"})
+
     def __init__(self, table_name: str) -> None:
+        _validate_identifier(table_name)
         self.table_name = table_name
+        self._has_soft_delete = table_name in self._SOFT_DELETE_TABLES
+        self._has_updated_at = table_name not in self._NO_UPDATED_AT
 
     async def create(
         self,
         data: dict[str, Any],
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new record."""
         record_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         data["id"] = record_id
         data["created_at"] = now
-        data["updated_at"] = now
+        if self._has_updated_at:
+            data["updated_at"] = now
         if tenant_id:
             data["tenant_id"] = tenant_id
 
-        # Remove None values
         data = {k: v for k, v in data.items() if v is not None}
+
+        for key in data:
+            _validate_identifier(key)
 
         columns = ", ".join(data.keys())
         placeholders = ", ".join(f":{k}" for k in data.keys())
 
         async with get_session(tenant_id) as session:
             await session.execute(
-                text(f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"),
+                text(
+                    f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"  # noqa: S608 — table_name validated by _validate_identifier; values use :param binding
+                ),
                 data,
             )
             logger.debug(f"Created record in {self.table_name}", record_id=record_id)
@@ -157,34 +238,40 @@ class BaseRepository:
     async def get_by_id(
         self,
         record_id: str,
-        tenant_id: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Get a single record by ID."""
-        query = f"SELECT * FROM {self.table_name} WHERE id = :id"
+        query = f"SELECT * FROM {self.table_name} WHERE id = :id"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"id": record_id}
 
         if tenant_id:
             query += " AND tenant_id = :tenant_id"
             params["tenant_id"] = tenant_id
 
-        query += " AND deleted_at IS NULL"
+        if self._has_soft_delete:
+            query += " AND deleted_at IS NULL"
 
         async with get_session(tenant_id) as session:
             result = await session.execute(text(query), params)
             row = result.mappings().first()
-            return dict(row) if row else None
+            return _stringify_uuids(dict(row)) if row else None
 
     async def list_all(
         self,
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
         *,
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at DESC",
-        filters: Optional[dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """List records with pagination and filtering."""
-        query = f"SELECT * FROM {self.table_name} WHERE deleted_at IS NULL"
+        _validate_order_clause(order_by)
+
+        if self._has_soft_delete:
+            query = f"SELECT * FROM {self.table_name} WHERE deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
+        else:
+            query = f"SELECT * FROM {self.table_name} WHERE 1=1"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"limit": limit, "offset": offset}
 
         if tenant_id:
@@ -193,6 +280,7 @@ class BaseRepository:
 
         if filters:
             for key, value in filters.items():
+                _validate_identifier(key)
                 query += f" AND {key} = :{key}"
                 params[key] = value
 
@@ -200,21 +288,24 @@ class BaseRepository:
 
         async with get_session(tenant_id) as session:
             result = await session.execute(text(query), params)
-            return [dict(row) for row in result.mappings().all()]
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
     async def update(
         self,
         record_id: str,
         data: dict[str, Any],
-        tenant_id: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Update a record by ID."""
-        data["updated_at"] = datetime.now(timezone.utc)
+        data["updated_at"] = datetime.now(UTC)
         data.pop("id", None)
         data.pop("created_at", None)
 
+        for key in data:
+            _validate_identifier(key)
+
         set_clause = ", ".join(f"{k} = :{k}" for k in data.keys())
-        query = f"UPDATE {self.table_name} SET {set_clause} WHERE id = :id"
+        query = f"UPDATE {self.table_name} SET {set_clause} WHERE id = :id"  # noqa: S608 — table_name validated at __init__
         params = {**data, "id": record_id}
 
         if tenant_id:
@@ -228,17 +319,19 @@ class BaseRepository:
             row = result.mappings().first()
             if row:
                 logger.debug(f"Updated record in {self.table_name}", record_id=record_id)
-                return dict(row)
+                return _stringify_uuids(dict(row))
             return None
 
     async def soft_delete(
         self,
         record_id: str,
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> bool:
-        """Soft delete a record by setting deleted_at."""
-        now = datetime.now(timezone.utc)
-        query = f"UPDATE {self.table_name} SET deleted_at = :now, updated_at = :now WHERE id = :id AND deleted_at IS NULL"
+        """Soft delete a record by setting deleted_at (or hard delete if table lacks the column)."""
+        if not self._has_soft_delete:
+            return await self.hard_delete(record_id, tenant_id)
+        now = datetime.now(UTC)
+        query = f"UPDATE {self.table_name} SET deleted_at = :now, updated_at = :now WHERE id = :id AND deleted_at IS NULL"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"id": record_id, "now": now}
 
         if tenant_id:
@@ -255,10 +348,10 @@ class BaseRepository:
     async def hard_delete(
         self,
         record_id: str,
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> bool:
         """Permanently delete a record."""
-        query = f"DELETE FROM {self.table_name} WHERE id = :id"
+        query = f"DELETE FROM {self.table_name} WHERE id = :id"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"id": record_id}
 
         if tenant_id:
@@ -271,11 +364,12 @@ class BaseRepository:
 
     async def count(
         self,
-        tenant_id: Optional[str] = None,
-        filters: Optional[dict[str, Any]] = None,
+        tenant_id: str | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> int:
         """Count records with optional filtering."""
-        query = f"SELECT COUNT(*) as cnt FROM {self.table_name} WHERE deleted_at IS NULL"
+        base_filter = "deleted_at IS NULL" if self._has_soft_delete else "1=1"
+        query = f"SELECT COUNT(*) as cnt FROM {self.table_name} WHERE {base_filter}"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {}
 
         if tenant_id:
@@ -284,6 +378,7 @@ class BaseRepository:
 
         if filters:
             for key, value in filters.items():
+                _validate_identifier(key)
                 query += f" AND {key} = :{key}"
                 params[key] = value
 
@@ -295,10 +390,11 @@ class BaseRepository:
     async def exists(
         self,
         record_id: str,
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> bool:
         """Check if a record exists."""
-        query = f"SELECT 1 FROM {self.table_name} WHERE id = :id AND deleted_at IS NULL"
+        base_filter = " AND deleted_at IS NULL" if self._has_soft_delete else ""
+        query = f"SELECT 1 FROM {self.table_name} WHERE id = :id{base_filter}"  # noqa: S608 — table_name validated at __init__
         params: dict[str, Any] = {"id": record_id}
 
         if tenant_id:
@@ -312,11 +408,12 @@ class BaseRepository:
 
 # ── Specialized Repositories ─────────────────────────────────
 
+
 class NotebookRepository(BaseRepository):
     def __init__(self) -> None:
         super().__init__("notebooks")
 
-    async def get_with_sources(self, notebook_id: str, tenant_id: str) -> Optional[dict]:
+    async def get_with_sources(self, notebook_id: str, tenant_id: str) -> dict | None:
         query = """
             SELECT n.*,
                    COALESCE(json_agg(
@@ -387,7 +484,7 @@ class SourceRepository(BaseRepository):
                     "limit": limit,
                 },
             )
-            return [dict(row) for row in result.mappings().all()]
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
     async def text_search(
         self,
@@ -411,7 +508,7 @@ class SourceRepository(BaseRepository):
                 text(query),
                 {"query": query_text, "tenant_id": tenant_id, "limit": limit},
             )
-            return [dict(row) for row in result.mappings().all()]
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
 
 class ArtifactRepository(BaseRepository):
@@ -435,9 +532,7 @@ class UsageRepository(BaseRepository):
     def __init__(self) -> None:
         super().__init__("usage_records")
 
-    async def get_usage_summary(
-        self, tenant_id: str, period_start: datetime
-    ) -> dict[str, Any]:
+    async def get_usage_summary(self, tenant_id: str, period_start: datetime) -> dict[str, Any]:
         query = """
             SELECT
                 COUNT(*) as total_requests,

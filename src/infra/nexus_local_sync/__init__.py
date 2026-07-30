@@ -11,11 +11,18 @@ Provides:
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
+=======
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Any
+>>>>>>> origin/main
 
 from loguru import logger
 
@@ -45,6 +52,10 @@ class ConflictStrategy(str, Enum):
 @dataclass
 class LocalModelInfo:
     """Information about a locally available model."""
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/main
     name: str
     provider: str
     model_type: str
@@ -64,7 +75,13 @@ class LocalModelManager:
         # Check Ollama
         try:
             import httpx
+<<<<<<< HEAD
             from src.config import get_settings
+=======
+
+            from src.config import get_settings
+
+>>>>>>> origin/main
             settings = get_settings()
 
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -72,6 +89,7 @@ class LocalModelManager:
                 if response.status_code == 200:
                     data = response.json()
                     for model in data.get("models", []):
+<<<<<<< HEAD
                         models.append(LocalModelInfo(
                             name=model["name"],
                             provider="ollama",
@@ -80,18 +98,37 @@ class LocalModelManager:
                             is_available=True,
                             model_size_gb=model.get("size", 0) / (1024**3),
                         ))
+=======
+                        models.append(
+                            LocalModelInfo(
+                                name=model["name"],
+                                provider="ollama",
+                                model_type="chat",
+                                base_url=f"{settings.ollama_base_url}/v1",
+                                is_available=True,
+                                model_size_gb=model.get("size", 0) / (1024**3),
+                            )
+                        )
+>>>>>>> origin/main
         except Exception:
             logger.debug("Ollama not available")
 
         # Check Kokoro TTS
         try:
             import httpx
+<<<<<<< HEAD
             from src.config import get_settings
+=======
+
+            from src.config import get_settings
+
+>>>>>>> origin/main
             settings = get_settings()
 
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{settings.kokoro_tts_base_url}/v1/models")
                 if response.status_code == 200:
+<<<<<<< HEAD
                     models.append(LocalModelInfo(
                         name="kokoro-tts",
                         provider="kokoro",
@@ -99,13 +136,28 @@ class LocalModelManager:
                         base_url=settings.kokoro_tts_base_url,
                         is_available=True,
                     ))
+=======
+                    models.append(
+                        LocalModelInfo(
+                            name="kokoro-tts",
+                            provider="kokoro",
+                            model_type="tts",
+                            base_url=settings.kokoro_tts_base_url,
+                            is_available=True,
+                        )
+                    )
+>>>>>>> origin/main
         except Exception:
             logger.debug("Kokoro TTS not available")
 
         logger.info(f"Detected {len(models)} local models")
         return models
 
+<<<<<<< HEAD
     async def auto_register_local_models(self, tenant_id: Optional[str] = None) -> int:
+=======
+    async def auto_register_local_models(self, tenant_id: str | None = None) -> int:
+>>>>>>> origin/main
         """Auto-register detected local models in the DB."""
         from src.infra.nexus_data_persist import BaseRepository
 
@@ -131,7 +183,15 @@ class LocalModelManager:
                     )
                     registered += 1
                 except Exception:
+<<<<<<< HEAD
                     pass  # Model may already be registered
+=======
+                    logger.debug(
+                        "Skipping local model registration (may already exist)",
+                        model=model.name,
+                        exc_info=True,
+                    )
+>>>>>>> origin/main
 
         logger.info(f"Auto-registered {registered} local models")
         return registered
@@ -157,6 +217,7 @@ class SyncQueue:
         from src.infra.nexus_data_persist import BaseRepository
 
         repo = BaseRepository("sync_queue")
+<<<<<<< HEAD
         result = await repo.create(data={
             "tenant_id": tenant_id,
             "device_id": device_id,
@@ -166,6 +227,19 @@ class SyncQueue:
             "payload": payload,
             "status": SyncStatus.PENDING.value,
         })
+=======
+        result = await repo.create(
+            data={
+                "tenant_id": tenant_id,
+                "device_id": device_id,
+                "operation": operation.value,
+                "table_name": table_name,
+                "record_id": record_id,
+                "payload": payload,
+                "status": SyncStatus.PENDING.value,
+            }
+        )
+>>>>>>> origin/main
         return result["id"]
 
     @traced("sync.process_queue")
@@ -176,9 +250,16 @@ class SyncQueue:
         conflict_strategy: ConflictStrategy = ConflictStrategy.LOCAL_WINS,
     ) -> dict[str, int]:
         """Process pending sync items."""
+<<<<<<< HEAD
         from src.infra.nexus_data_persist import get_session
         from sqlalchemy import text
 
+=======
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+>>>>>>> origin/main
         async with get_session(tenant_id) as session:
             result = await session.execute(
                 text("""
@@ -212,8 +293,12 @@ class SyncQueue:
         strategy: ConflictStrategy,
     ) -> None:
         """Sync a single queue item to the cloud database."""
+<<<<<<< HEAD
         from src.infra.nexus_data_persist import BaseRepository, get_session
         from sqlalchemy import text
+=======
+        from src.infra.nexus_data_persist import BaseRepository
+>>>>>>> origin/main
 
         repo = BaseRepository(item["table_name"])
 
@@ -226,10 +311,20 @@ class SyncQueue:
 
         # Mark as synced
         sync_repo = BaseRepository("sync_queue")
+<<<<<<< HEAD
         await sync_repo.update(item["id"], {
             "status": SyncStatus.SYNCED.value,
             "synced_at": datetime.now(timezone.utc),
         })
+=======
+        await sync_repo.update(
+            item["id"],
+            {
+                "status": SyncStatus.SYNCED.value,
+                "synced_at": datetime.now(UTC),
+            },
+        )
+>>>>>>> origin/main
 
     def get_feature_matrix(self, is_online: bool) -> dict[str, bool]:
         """Feature availability matrix for online vs offline mode."""
@@ -248,6 +343,221 @@ class SyncQueue:
             "real_time_collab": is_online,
         }
 
+<<<<<<< HEAD
+=======
+    async def list_models(self) -> list[dict[str, Any]]:
+        """List local models in router-friendly format."""
+        detected = await self.detect_local_models()
+        return [
+            {
+                "name": m.name,
+                "provider": m.provider,
+                "size_gb": m.model_size_gb,
+                "quantization": "unknown",
+                "capabilities": [m.model_type],
+                "status": "available" if m.is_available else "not_installed",
+                "download_progress": None,
+            }
+            for m in detected
+        ]
+
+    @traced("local.pull_model")
+    async def pull_model(self, model_name: str) -> None:
+        """Pull/download a model via Ollama API."""
+        import httpx
+
+        from src.config import get_settings
+
+        settings = get_settings()
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            await client.post(
+                f"{settings.ollama_base_url}/api/pull",
+                json={"name": model_name},
+            )
+        logger.info("Model pull started", model=model_name)
+
+    @traced("local.remove_model")
+    async def remove_model(self, model_name: str) -> None:
+        """Remove a local model via Ollama API."""
+        import httpx
+
+        from src.config import get_settings
+
+        settings = get_settings()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await client.delete(
+                f"{settings.ollama_base_url}/api/delete",
+                json={"name": model_name},
+            )
+        logger.info("Model removed", model=model_name)
+
+
+class SyncManager:
+    """High-level sync management for the local router."""
+
+    def __init__(self) -> None:
+        self._queue = SyncQueue()
+
+    async def get_status(self, tenant_id: str, user_id: str) -> dict[str, Any]:
+        """Get sync status overview."""
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        try:
+            async with get_session(tenant_id) as session:
+                result = await session.execute(
+                    text("""
+                        SELECT
+                            COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+                            COUNT(*) FILTER (WHERE status = 'conflict') AS conflicts,
+                            MAX(CASE WHEN status = 'synced' THEN synced_at END) AS last_sync
+                        FROM sync_queue
+                        WHERE tenant_id = :tid
+                    """),
+                    {"tid": tenant_id},
+                )
+                row = result.mappings().first()
+        except Exception:
+            row = None
+
+        return {
+            "mode": "online",
+            "pending_operations": int(row["pending"]) if row and row["pending"] else 0,
+            "last_sync_at": str(row["last_sync"]) if row and row["last_sync"] else None,
+            "conflicts": int(row["conflicts"]) if row and row["conflicts"] else 0,
+            "queue_size": int(row["pending"]) if row and row["pending"] else 0,
+        }
+
+    async def trigger_sync(self, tenant_id: str, user_id: str) -> None:
+        """Manually trigger sync processing."""
+        await self._queue.process_queue(tenant_id, device_id="default")
+
+    async def list_conflicts(self, tenant_id: str, user_id: str) -> list[dict[str, Any]]:
+        """List unresolved sync conflicts."""
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        async with get_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT id, table_name, record_id, payload, created_at
+                    FROM sync_queue
+                    WHERE tenant_id = :tid AND status = 'conflict'
+                    ORDER BY created_at DESC
+                """),
+                {"tid": tenant_id},
+            )
+            rows = result.mappings().all()
+
+        return [
+            {
+                "id": str(r["id"]),
+                "resource_type": r["table_name"],
+                "resource_id": str(r["record_id"]),
+                "local_version": "local",
+                "remote_version": "remote",
+                "strategy": "manual",
+                "created_at": str(r["created_at"]),
+            }
+            for r in rows
+        ]
+
+    async def resolve_conflict(self, tenant_id: str, conflict_id: str, strategy: str) -> None:
+        """Resolve a sync conflict."""
+        from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
+
+        async with get_session(tenant_id) as session:
+            await session.execute(
+                text("""
+                    UPDATE sync_queue SET status = 'synced',
+                    synced_at = NOW() WHERE id = :cid AND tenant_id = :tid
+                """),
+                {"cid": conflict_id, "tid": tenant_id},
+            )
+            await session.commit()
+
+
+def get_feature_matrix() -> list[dict[str, Any]]:
+    """Module-level feature availability matrix."""
+    features = [
+        {
+            "feature": "Chat (AI conversation)",
+            "online": True,
+            "offline": True,
+            "degraded_note": None,
+        },
+        {"feature": "Source Upload (file)", "online": True, "offline": True, "degraded_note": None},
+        {
+            "feature": "Source Upload (URL)",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires internet to fetch URL content",
+        },
+        {
+            "feature": "Source Upload (YouTube)",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires internet for transcript",
+        },
+        {"feature": "Vector Search", "online": True, "offline": True, "degraded_note": None},
+        {
+            "feature": "Deep Research (web)",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Web search requires internet",
+        },
+        {
+            "feature": "Deep Research (local)",
+            "online": True,
+            "offline": True,
+            "degraded_note": "Limited to local sources only",
+        },
+        {
+            "feature": "Audio Generation",
+            "online": True,
+            "offline": True,
+            "degraded_note": "Uses local Kokoro TTS when offline",
+        },
+        {"feature": "Slide Generation", "online": True, "offline": True, "degraded_note": None},
+        {
+            "feature": "Video Generation",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires cloud vision models",
+        },
+        {
+            "feature": "Export (PDF/DOCX/EPUB)",
+            "online": True,
+            "offline": True,
+            "degraded_note": None,
+        },
+        {
+            "feature": "Real-time Collaboration",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Requires WebSocket connection",
+        },
+        {
+            "feature": "Cloud Model Access",
+            "online": True,
+            "offline": False,
+            "degraded_note": "Uses local Ollama models when offline",
+        },
+        {"feature": "Flashcard Review", "online": True, "offline": True, "degraded_note": None},
+        {
+            "feature": "Budget Tracking",
+            "online": True,
+            "offline": True,
+            "degraded_note": "Local costs are $0",
+        },
+    ]
+    return features
+
+>>>>>>> origin/main
 
 # Global singletons
 local_model_manager = LocalModelManager()

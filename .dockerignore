@@ -1,0 +1,57 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+dist
+build
+*.egg
+.venv
+venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+htmlcov
+coverage*.xml
+results-*.xml
+bandit-results.json
+
+# Node / Frontend
+frontend/node_modules
+frontend/.next
+frontend/out
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+docker-compose.override.yml
+
+# Storage & logs
+storage/
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# Tests (not needed in production image)
+tests/

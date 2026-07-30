@@ -16,18 +16,18 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, cast
 
 from loguru import logger
 
+from src.exceptions import ValidationError
 from src.infra.nexus_obs_tracing import traced
-from src.exceptions import ChainExecutionError, ValidationError
-
 
 # ── Types ────────────────────────────────────────────────────
+
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
@@ -35,7 +35,7 @@ class JobStatus(str, Enum):
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    PARTIAL = "partial"       # Some sub-tasks completed, others failed
+    PARTIAL = "partial"  # Some sub-tasks completed, others failed
 
 
 class ArtifactType(str, Enum):
@@ -47,6 +47,7 @@ class ArtifactType(str, Enum):
     TIMELINE = "timeline"
     FAQ = "faq"
     BRIEFING = "briefing"
+    MEETING_MINUTES = "meeting_minutes"
     SLIDE_DECK = "slide_deck"
     VIDEO = "video"
     MIND_MAP = "mind_map"
@@ -56,14 +57,15 @@ class ArtifactType(str, Enum):
 @dataclass
 class GenerationStep:
     """A single step in the generation pipeline."""
+
     step_id: str
     name: str
     status: JobStatus = JobStatus.QUEUED
     progress_pct: float = 0.0
-    output: Optional[str] = None
-    error: Optional[str] = None
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
+    output: str | None = None
+    error: str | None = None
+    started_at: float | None = None
+    completed_at: float | None = None
     retries: int = 0
     max_retries: int = 2
 
@@ -71,6 +73,7 @@ class GenerationStep:
 @dataclass
 class GenerationJob:
     """A complete artifact generation job."""
+
     job_id: str
     artifact_id: str
     artifact_type: ArtifactType
@@ -80,11 +83,11 @@ class GenerationJob:
     status: JobStatus = JobStatus.QUEUED
     steps: list[GenerationStep] = field(default_factory=list)
     config: dict[str, Any] = field(default_factory=dict)
-    result: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
     created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
+    started_at: float | None = None
+    completed_at: float | None = None
     progress_pct: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -115,6 +118,11 @@ class GenerationJob:
 
 ARTIFACT_PIPELINES: dict[ArtifactType, list[str]] = {
     ArtifactType.SUMMARY: [
+        "gather_sources",
+        "generate_content",
+        "format_output",
+    ],
+    ArtifactType.MEETING_MINUTES: [
         "gather_sources",
         "generate_content",
         "format_output",
@@ -192,6 +200,7 @@ ARTIFACT_PIPELINES: dict[ArtifactType, list[str]] = {
 
 # ── Step Executors ───────────────────────────────────────────
 
+
 class StepExecutors:
     """
     Concrete implementations for each pipeline step.
@@ -206,8 +215,9 @@ class StepExecutors:
         context: dict[str, Any],
     ) -> dict[str, Any]:
         """Retrieve and prepare source content for generation."""
-        from src.infra.nexus_data_persist import sources_repo, get_session
         from sqlalchemy import text
+
+        from src.infra.nexus_data_persist import get_session
 
         async with get_session(job.tenant_id) as session:
             result = await session.execute(
@@ -306,7 +316,7 @@ class StepExecutors:
         context: dict[str, Any],
     ) -> dict[str, Any]:
         """Assemble audio segments with cross-fade and intro/outro."""
-        from src.core.nexus_audio_join import audio_engine, AudioConfig
+        from src.core.nexus_audio_join import AudioConfig, audio_engine
 
         segments = context.get("audio_segments", [])
         config = AudioConfig(
@@ -428,7 +438,7 @@ class StepExecutors:
     async def outline_topics(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.generate_content(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.generate_content(job, step, context))
 
     @staticmethod
     async def generate_sections(
@@ -453,7 +463,7 @@ class StepExecutors:
     async def extract_events(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.generate_content(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.generate_content(job, step, context))
 
     @staticmethod
     async def order_chronologically(
@@ -472,7 +482,7 @@ class StepExecutors:
     async def extract_questions(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.generate_questions(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.generate_questions(job, step, context))
 
     @staticmethod
     async def generate_answers(
@@ -491,7 +501,7 @@ class StepExecutors:
     async def summarize_key_points(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.generate_content(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.generate_content(job, step, context))
 
     @staticmethod
     async def format_briefing(
@@ -504,7 +514,7 @@ class StepExecutors:
     async def generate_outline(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.generate_content(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.generate_content(job, step, context))
 
     @staticmethod
     @traced("studio.build_pptx")
@@ -513,6 +523,7 @@ class StepExecutors:
     ) -> dict[str, Any]:
         """Build a PowerPoint slide deck."""
         from src.core.nexus_slide_engine import slide_engine
+
         content = context.get("generated_content", "")
         result = await slide_engine.generate(content, job.config)
         context["final_content"] = result
@@ -539,6 +550,7 @@ class StepExecutors:
     ) -> dict[str, Any]:
         """Compose final video from audio + visuals."""
         from src.core.nexus_video_engine import video_engine
+
         result = await video_engine.compose(context, job.config)
         context["final_content"] = result
         return context
@@ -547,7 +559,7 @@ class StepExecutors:
     async def extract_concepts(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.extract_key_concepts(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.extract_key_concepts(job, step, context))
 
     @staticmethod
     async def build_relationships(
@@ -566,7 +578,7 @@ class StepExecutors:
     async def extract_statistics(
         job: GenerationJob, step: GenerationStep, context: dict[str, Any]
     ) -> dict[str, Any]:
-        return await StepExecutors.generate_content(job, step, context)
+        return cast(dict[str, Any], await StepExecutors.generate_content(job, step, context))
 
     @staticmethod
     async def design_layout(
@@ -626,6 +638,7 @@ STEP_REGISTRY: dict[str, Callable] = {
 
 # ── Studio Queue Engine ──────────────────────────────────────
 
+
 class StudioQueue:
     """
     Artifact generation queue with error isolation, retry, and progress streaming.
@@ -646,13 +659,13 @@ class StudioQueue:
         notebook_id: str,
         tenant_id: str,
         user_id: str,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
     ) -> GenerationJob:
         """Submit a new generation job to the queue."""
         try:
             art_type = ArtifactType(artifact_type)
-        except ValueError:
-            raise ValidationError(f"Unknown artifact type: {artifact_type}")
+        except ValueError as e:
+            raise ValidationError(f"Unknown artifact type: {artifact_type}") from e
 
         pipeline = ARTIFACT_PIPELINES.get(art_type, [])
         if not pipeline:
@@ -668,7 +681,7 @@ class StudioQueue:
             config=config or {},
             steps=[
                 GenerationStep(
-                    step_id=f"{i+1}_{name}",
+                    step_id=f"{i + 1}_{name}",
                     name=name,
                 )
                 for i, name in enumerate(pipeline)
@@ -723,10 +736,8 @@ class StudioQueue:
                     except Exception as e:
                         step.retries = attempt + 1
                         if attempt < step.max_retries:
-                            logger.warning(
-                                f"Step {step.name} retry {attempt + 1}: {e}"
-                            )
-                            await asyncio.sleep(2 ** attempt)
+                            logger.warning(f"Step {step.name} retry {attempt + 1}: {e}")
+                            await asyncio.sleep(2**attempt)
                         else:
                             step.status = JobStatus.FAILED
                             step.error = str(e)[:500]
@@ -742,7 +753,11 @@ class StudioQueue:
                 await self._notify_progress(job)
 
                 # If a critical step fails, stop the pipeline
-                if not success and step.name in ("gather_sources", "generate_content", "generate_script"):
+                if not success and step.name in (
+                    "gather_sources",
+                    "generate_content",
+                    "generate_script",
+                ):
                     job.error = f"Critical step failed: {step.name}"
                     break
 
@@ -777,8 +792,9 @@ class StudioQueue:
     async def _persist_result(self, job: GenerationJob) -> None:
         """Save the generation result to the artifacts table."""
         try:
-            from src.infra.nexus_data_persist import get_session
             from sqlalchemy import text
+
+            from src.infra.nexus_data_persist import get_session
 
             async with get_session(job.tenant_id) as session:
                 await session.execute(
@@ -819,25 +835,33 @@ class StudioQueue:
                 else:
                     cb(job.to_dict())
             except Exception:
-                pass
+                logger.warning(
+                    "Studio queue progress callback failed",
+                    extra={"job_id": job.job_id},
+                    exc_info=True,
+                )
 
         # Also broadcast via WebSocket if available
         try:
             from src.api.websocket import manager
-            await manager.broadcast_to_user(
-                user_id=job.user_id,
-                tenant_id=job.tenant_id,
-                data={
+
+            await manager.send_to_user(
+                job.user_id,
+                {
                     "type": "artifact_progress",
                     "job": job.to_dict(),
                 },
             )
         except Exception:
-            pass
+            logger.warning(
+                "Studio queue WebSocket broadcast failed",
+                extra={"job_id": job.job_id, "user_id": job.user_id},
+                exc_info=True,
+            )
 
     # ── Job Management ───────────────────────────────
 
-    def get_job(self, job_id: str) -> Optional[GenerationJob]:
+    def get_job(self, job_id: str) -> GenerationJob | None:
         """Get job by ID."""
         return self._jobs.get(job_id)
 
@@ -857,7 +881,7 @@ class StudioQueue:
 
     @property
     def stats(self) -> dict[str, int]:
-        statuses = {}
+        statuses: dict[str, int] = {}
         for job in self._jobs.values():
             s = job.status.value
             statuses[s] = statuses.get(s, 0) + 1

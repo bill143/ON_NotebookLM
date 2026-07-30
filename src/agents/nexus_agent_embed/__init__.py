@@ -7,14 +7,14 @@ Handles: Document chunking, embedding generation, and vector storage.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
 from src.infra.nexus_obs_tracing import traced
 
-
 # ── Chunking ─────────────────────────────────────────────────
+
 
 def chunk_text(
     text: str,
@@ -42,7 +42,7 @@ def chunk_text(
             # Handle paragraphs larger than chunk_size
             if len(para) > chunk_size:
                 for i in range(0, len(para), chunk_size - chunk_overlap):
-                    sub = para[i:i + chunk_size]
+                    sub = para[i : i + chunk_size]
                     chunks.append(sub.strip())
                 current_chunk = ""
             else:
@@ -63,6 +63,7 @@ def count_tokens(text: str) -> int:
     """Estimate token count (rough approximation: 4 chars ≈ 1 token)."""
     try:
         import tiktoken
+
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
     except ImportError:
@@ -71,6 +72,7 @@ def count_tokens(text: str) -> int:
 
 # ── Embedding Agent ──────────────────────────────────────────
 
+
 @traced("agent.embed.vectorize_source")
 async def vectorize_source(state: Any) -> dict[str, Any]:
     """
@@ -78,9 +80,10 @@ async def vectorize_source(state: Any) -> dict[str, Any]:
 
     Source: Repo #7, notebook.py ~L411-457 (embed_source command)
     """
+    from sqlalchemy import text
+
     from src.agents.nexus_model_layer import model_manager
     from src.infra.nexus_data_persist import get_session
-    from sqlalchemy import text
 
     source_id = state.inputs.get("source_id", "")
     source_content = state.inputs.get("source_content", "")
@@ -101,7 +104,7 @@ async def vectorize_source(state: Any) -> dict[str, Any]:
     all_embeddings: list[list[float]] = []
 
     for i in range(0, len(chunks), batch_size):
-        batch = chunks[i:i + batch_size]
+        batch = chunks[i : i + batch_size]
         result = await embedding_provider.embed(batch)
         all_embeddings.extend(result.embeddings)
 
@@ -114,7 +117,9 @@ async def vectorize_source(state: Any) -> dict[str, Any]:
         )
 
         # Insert new embeddings
-        for idx, (chunk_text_content, embedding) in enumerate(zip(chunks, all_embeddings)):
+        for idx, (chunk_text_content, embedding) in enumerate(
+            zip(chunks, all_embeddings, strict=False)
+        ):
             token_cnt = count_tokens(chunk_text_content)
             await session.execute(
                 text("""
@@ -138,6 +143,7 @@ async def vectorize_source(state: Any) -> dict[str, Any]:
         )
 
     from src.infra.nexus_obs_tracing import metrics
+
     metrics.embedding_count.labels(source_type="source").inc(len(chunks))
 
     logger.info(f"Vectorized source: {len(chunks)} chunks embedded", source_id=source_id)
@@ -151,9 +157,10 @@ async def vectorize_note(
     tenant_id: str,
 ) -> list[float]:
     """Generate and store embedding for a single note."""
+    from sqlalchemy import text
+
     from src.agents.nexus_model_layer import model_manager
     from src.infra.nexus_data_persist import get_session
-    from sqlalchemy import text
 
     embedding_provider = await model_manager.provision_embedding(tenant_id=tenant_id)
     result = await embedding_provider.embed([content])

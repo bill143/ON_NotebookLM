@@ -14,22 +14,18 @@ Provides:
 from __future__ import annotations
 
 import io
-import json
-import os
 import re
-import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from loguru import logger
 
-from src.infra.nexus_obs_tracing import traced
 from src.exceptions import ValidationError
-
+from src.infra.nexus_obs_tracing import traced
 
 # ── Types ────────────────────────────────────────────────────
+
 
 class ExportFormat:
     PDF = "pdf"
@@ -43,12 +39,13 @@ class ExportFormat:
 @dataclass
 class ExportContent:
     """Content to be exported."""
+
     title: str
-    content: str                               # Markdown-formatted content
+    content: str  # Markdown-formatted content
     author: str = "Nexus Notebook 11 LM"
-    created_at: Optional[str] = None
+    created_at: str | None = None
     notebook_name: str = ""
-    content_type: str = ""                     # "summary", "quiz", "report", etc.
+    content_type: str = ""  # "summary", "quiz", "report", etc.
     sections: list[dict[str, str]] = field(default_factory=list)  # {title, content}
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -56,23 +53,25 @@ class ExportContent:
 @dataclass
 class ExportOptions:
     """Export configuration."""
+
     format: str = ExportFormat.PDF
     include_toc: bool = True
     include_header: bool = True
     include_footer: bool = True
     include_metadata: bool = True
-    page_size: str = "A4"                      # "A4", "Letter"
+    page_size: str = "A4"  # "A4", "Letter"
     font_family: str = "Helvetica"
     font_size: int = 11
     line_spacing: float = 1.4
     margin_mm: int = 25
-    branding_color: str = "#6366f1"            # Primary brand color
-    watermark: Optional[str] = None
+    branding_color: str = "#6366f1"  # Primary brand color
+    watermark: str | None = None
 
 
 @dataclass
 class ExportResult:
     """Result of an export operation."""
+
     data: bytes
     filename: str
     mime_type: str
@@ -81,6 +80,7 @@ class ExportResult:
 
 
 # ── Markdown Parser ──────────────────────────────────────────
+
 
 class MarkdownParser:
     """Parse markdown into structured sections for export."""
@@ -95,40 +95,48 @@ class MarkdownParser:
         for line in content.split("\n"):
             if line.startswith("# "):
                 if current_body:
-                    sections.append({
-                        "title": current_title,
-                        "content": "\n".join(current_body).strip(),
-                        "level": "1",
-                    })
+                    sections.append(
+                        {
+                            "title": current_title,
+                            "content": "\n".join(current_body).strip(),
+                            "level": "1",
+                        }
+                    )
                 current_title = line[2:].strip()
                 current_body = []
             elif line.startswith("## "):
                 if current_body:
-                    sections.append({
-                        "title": current_title,
-                        "content": "\n".join(current_body).strip(),
-                        "level": "2" if current_title else "1",
-                    })
+                    sections.append(
+                        {
+                            "title": current_title,
+                            "content": "\n".join(current_body).strip(),
+                            "level": "2" if current_title else "1",
+                        }
+                    )
                 current_title = line[3:].strip()
                 current_body = []
             elif line.startswith("### "):
                 if current_body:
-                    sections.append({
-                        "title": current_title,
-                        "content": "\n".join(current_body).strip(),
-                        "level": "3",
-                    })
+                    sections.append(
+                        {
+                            "title": current_title,
+                            "content": "\n".join(current_body).strip(),
+                            "level": "3",
+                        }
+                    )
                 current_title = line[4:].strip()
                 current_body = []
             else:
                 current_body.append(line)
 
         if current_body:
-            sections.append({
-                "title": current_title,
-                "content": "\n".join(current_body).strip(),
-                "level": "1",
-            })
+            sections.append(
+                {
+                    "title": current_title,
+                    "content": "\n".join(current_body).strip(),
+                    "level": "1",
+                }
+            )
 
         return sections
 
@@ -148,6 +156,7 @@ class MarkdownParser:
         """Convert markdown to HTML for EPUB/PDF."""
         try:
             import markdown
+
             return markdown.markdown(
                 content,
                 extensions=["tables", "fenced_code", "toc", "nl2br"],
@@ -167,6 +176,7 @@ class MarkdownParser:
 
 # ── PDF Exporter ─────────────────────────────────────────────
 
+
 class PDFExporter:
     """Export content to PDF using reportlab."""
 
@@ -179,18 +189,20 @@ class PDFExporter:
         """Generate a styled PDF document."""
         try:
             from reportlab.lib import colors
+            from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
             from reportlab.lib.pagesizes import A4, letter
-            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
             from reportlab.lib.units import mm
             from reportlab.platypus import (
-                SimpleDocTemplate, Paragraph, Spacer, Table,
-                TableStyle, PageBreak, HRFlowable,
+                HRFlowable,
+                Paragraph,
+                SimpleDocTemplate,
+                Spacer,
             )
-            from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
-        except ImportError:
+        except ImportError as e:
             raise ValidationError(
                 "reportlab is required for PDF export. Install with: pip install reportlab"
-            )
+            ) from e
 
         buffer = io.BytesIO()
         page_size = A4 if options.page_size == "A4" else letter
@@ -266,22 +278,24 @@ class PDFExporter:
         story.append(Paragraph(content.title, title_style))
 
         if content.notebook_name:
-            story.append(Paragraph(
-                f"From: {content.notebook_name}", meta_style
-            ))
+            story.append(Paragraph(f"From: {content.notebook_name}", meta_style))
 
-        story.append(Paragraph(
-            f"Generated: {content.created_at or datetime.now(timezone.utc).strftime('%B %d, %Y')}",
-            meta_style,
-        ))
+        story.append(
+            Paragraph(
+                f"Generated: {content.created_at or datetime.now(UTC).strftime('%B %d, %Y')}",
+                meta_style,
+            )
+        )
 
-        story.append(HRFlowable(
-            width="80%",
-            color=brand_color,
-            thickness=2,
-            spaceBefore=10,
-            spaceAfter=20,
-        ))
+        story.append(
+            HRFlowable(
+                width="80%",
+                color=brand_color,
+                thickness=2,
+                spaceBefore=10,
+                spaceAfter=20,
+            )
+        )
 
         # Parse and render content
         sections = content.sections or MarkdownParser.parse_sections(content.content)
@@ -317,17 +331,21 @@ class PDFExporter:
         # Footer
         if options.include_footer:
             story.append(Spacer(1, 30))
-            story.append(HRFlowable(
-                width="60%",
-                color=colors.HexColor("#e5e7eb"),
-                thickness=0.5,
-                spaceBefore=10,
-                spaceAfter=10,
-            ))
-            story.append(Paragraph(
-                "Generated by Nexus Notebook 11 LM — Codename: ESPERANTO",
-                meta_style,
-            ))
+            story.append(
+                HRFlowable(
+                    width="60%",
+                    color=colors.HexColor("#e5e7eb"),
+                    thickness=0.5,
+                    spaceBefore=10,
+                    spaceAfter=10,
+                )
+            )
+            story.append(
+                Paragraph(
+                    "Generated by Nexus Notebook 11 LM — Codename: ESPERANTO",
+                    meta_style,
+                )
+            )
 
         doc.build(story)
         pdf_data = buffer.getvalue()
@@ -352,6 +370,7 @@ class PDFExporter:
 
 # ── DOCX Exporter ────────────────────────────────────────────
 
+
 class DOCXExporter:
     """Export content to DOCX using python-docx."""
 
@@ -364,12 +383,12 @@ class DOCXExporter:
         """Generate a styled DOCX document."""
         try:
             from docx import Document
-            from docx.shared import Inches, Pt, RGBColor
             from docx.enum.text import WD_ALIGN_PARAGRAPH
-        except ImportError:
+            from docx.shared import Pt, RGBColor
+        except ImportError as e:
             raise ValidationError(
                 "python-docx is required for DOCX export. Install with: pip install python-docx"
-            )
+            ) from e
 
         doc = Document()
 
@@ -387,16 +406,14 @@ class DOCXExporter:
         # Title
         title_para = doc.add_heading(content.title, level=0)
         for run in title_para.runs:
-            run.font.color.rgb = RGBColor.from_string(
-                options.branding_color.lstrip("#")
-            )
+            run.font.color.rgb = RGBColor.from_string(options.branding_color.lstrip("#"))
 
         # Metadata
         if options.include_metadata:
             meta_para = doc.add_paragraph()
             meta_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = meta_para.add_run(
-                f"Generated: {content.created_at or datetime.now(timezone.utc).strftime('%B %d, %Y')}"
+                f"Generated: {content.created_at or datetime.now(UTC).strftime('%B %d, %Y')}"
             )
             run.font.size = Pt(9)
             run.font.color.rgb = RGBColor(156, 163, 175)
@@ -445,9 +462,7 @@ class DOCXExporter:
             doc.add_paragraph("")
             footer_para = doc.add_paragraph()
             footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = footer_para.add_run(
-                "Generated by Nexus Notebook 11 LM — Codename: ESPERANTO"
-            )
+            run = footer_para.add_run("Generated by Nexus Notebook 11 LM — Codename: ESPERANTO")
             run.font.size = Pt(8)
             run.font.color.rgb = RGBColor(156, 163, 175)
 
@@ -469,8 +484,6 @@ class DOCXExporter:
     @staticmethod
     def _add_formatted_text(para, text: str):
         """Add text with basic bold/italic formatting."""
-        from docx.shared import Pt
-
         # Simple bold/italic parsing
         parts = re.split(r"(\*\*.*?\*\*|\*.*?\*)", text)
         for part in parts:
@@ -487,6 +500,7 @@ class DOCXExporter:
 
 # ── EPUB Exporter ────────────────────────────────────────────
 
+
 class EPUBExporter:
     """Export content to EPUB for e-reader consumption."""
 
@@ -499,10 +513,10 @@ class EPUBExporter:
         """Generate an EPUB document."""
         try:
             from ebooklib import epub
-        except ImportError:
+        except ImportError as e:
             raise ValidationError(
                 "ebooklib is required for EPUB export. Install with: pip install ebooklib"
-            )
+            ) from e
 
         book = epub.EpubBook()
 
@@ -549,7 +563,7 @@ class EPUBExporter:
 
         # Table of contents
         book.toc = [
-            epub.Link(f"chapter_{i+1}.xhtml", ch.title, f"ch{i+1}")
+            epub.Link(f"chapter_{i + 1}.xhtml", ch.title, f"ch{i + 1}")
             for i, ch in enumerate(chapters)
         ]
 
@@ -615,6 +629,7 @@ class EPUBExporter:
 
 # ── Unified Export API ───────────────────────────────────────
 
+
 class ExportEngine:
     """
     Unified export engine — routes to the correct format exporter.
@@ -629,7 +644,7 @@ class ExportEngine:
     async def export(
         self,
         content: ExportContent,
-        options: Optional[ExportOptions] = None,
+        options: ExportOptions | None = None,
     ) -> ExportResult:
         """Export content to the specified format."""
         if not options:
@@ -679,7 +694,7 @@ code {{ background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }}
 </style></head><body>
 <h1>{content.title}</h1>
 <p style="color:#9ca3af;font-size:0.85em">
-Generated: {content.created_at or datetime.now(timezone.utc).strftime('%B %d, %Y')}
+Generated: {content.created_at or datetime.now(UTC).strftime("%B %d, %Y")}
 </p><hr>{body_html}
 <hr><p style="text-align:center;color:#9ca3af;font-size:0.75em">
 Generated by Nexus Notebook 11 LM — ESPERANTO</p>
@@ -710,7 +725,7 @@ Generated by Nexus Notebook 11 LM — ESPERANTO</p>
     async def export_batch(
         self,
         contents: list[ExportContent],
-        options: Optional[ExportOptions] = None,
+        options: ExportOptions | None = None,
     ) -> list[ExportResult]:
         """Export multiple contents to the same format."""
         results = []

@@ -1,0 +1,19 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: nexus-slack
+    receivers:
+      - uid: nexus-slack-uid
+        type: slack
+        settings:
+          url: ${SLACK_WEBHOOK_URL}
+          title: >-
+            NEXUS Chat Alert — {{ .CommonLabels.alertname }}
+          text: >-
+            {{ range .Alerts }}
+            *Status*: {{ .Status | toUpper }}
+            *Summary*: {{ .Annotations.summary }}
+            *Severity*: {{ .Labels.severity }}
+            {{ end }}
+          mentionChannel: here
+        disableResolveMessage: false

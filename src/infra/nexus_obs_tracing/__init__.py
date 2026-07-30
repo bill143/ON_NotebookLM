@@ -14,10 +14,11 @@ from __future__ import annotations
 import sys
 import time
 import uuid
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Callable, Optional
+from typing import Any, cast
 
 from loguru import logger
 
@@ -87,7 +88,7 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     if log_format == "json":
         logger.add(
             sys.stdout,
-            format=_json_formatter,
+            format=cast(Callable[..., str], _json_formatter),
             level=log_level,
             serialize=False,
             backtrace=True,
@@ -111,6 +112,7 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
 
 # ── Trace Context Manager ───────────────────────────────────
 
+
 def generate_trace_id() -> str:
     return uuid.uuid4().hex[:16]
 
@@ -122,8 +124,8 @@ def generate_span_id() -> str:
 @asynccontextmanager
 async def trace_context(
     operation: str,
-    user_id: Optional[str] = None,
-    tenant_id: Optional[str] = None,
+    user_id: str | None = None,
+    tenant_id: str | None = None,
 ):
     """Async context manager that sets up trace context for a request."""
     tid = trace_id_var.get("") or generate_trace_id()
@@ -162,8 +164,10 @@ async def trace_context(
 
 # ── Performance Decorator ───────────────────────────────────
 
-def traced(operation: Optional[str] = None) -> Callable:
+
+def traced(operation: str | None = None) -> Callable:
     """Decorator to trace function execution with timing."""
+
     def decorator(func: Callable) -> Callable:
         op_name = operation or f"{func.__module__}.{func.__qualname__}"
 
@@ -219,8 +223,9 @@ def traced(operation: Optional[str] = None) -> Callable:
             finally:
                 span_id_var.set(parent_span)
 
-        import asyncio
-        if asyncio.iscoroutinefunction(func):
+        import inspect
+
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 
@@ -229,11 +234,12 @@ def traced(operation: Optional[str] = None) -> Callable:
 
 # ── Metrics (Prometheus) ─────────────────────────────────────
 
+
 class MetricsCollector:
     """Prometheus metrics for Nexus Notebook 11 LM."""
 
     def __init__(self) -> None:
-        from prometheus_client import Counter, Histogram, Gauge
+        from prometheus_client import Counter, Gauge, Histogram
 
         self.request_count = Counter(
             "nexus_request_total",
@@ -303,9 +309,7 @@ class MetricsCollector:
         self.ai_tokens.labels(provider=provider, model=model, direction="input").inc(input_tokens)
         self.ai_tokens.labels(provider=provider, model=model, direction="output").inc(output_tokens)
         if cost_usd > 0:
-            self.ai_cost.labels(
-                provider=provider, model=model, tenant_id=tenant_id
-            ).inc(cost_usd)
+            self.ai_cost.labels(provider=provider, model=model, tenant_id=tenant_id).inc(cost_usd)
 
 
 # Global singleton

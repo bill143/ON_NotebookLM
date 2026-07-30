@@ -18,59 +18,61 @@ import io
 import json
 import os
 import struct
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
 from src.infra.nexus_obs_tracing import traced
 
-
 # ── Types ────────────────────────────────────────────────────
+
 
 @dataclass
 class AudioSegment:
     """A single audio segment (e.g., one TTS line)."""
+
     audio_data: bytes
     speaker: str = ""
     text: str = ""
     duration_ms: float = 0.0
     sample_rate: int = 24000
-    format: str = "mp3"         # "mp3", "wav", "ogg"
+    format: str = "mp3"  # "mp3", "wav", "ogg"
 
 
 @dataclass
 class AudioConfig:
     """Configuration for audio assembly."""
+
     # Cross-fade settings
-    crossfade_ms: int = 150              # Overlap between segments
+    crossfade_ms: int = 150  # Overlap between segments
     pause_between_speakers_ms: int = 400  # Silence gap when speaker changes
-    pause_within_speaker_ms: int = 100    # Short gap same speaker
+    pause_within_speaker_ms: int = 100  # Short gap same speaker
 
     # Intro/Outro
-    intro_audio_path: Optional[str] = None
-    outro_audio_path: Optional[str] = None
-    intro_duration_ms: int = 3000        # How long intro plays before speech
-    outro_duration_ms: int = 3000        # How long outro plays after speech
-    music_volume_db: float = -18.0       # Background music volume during speech
-    music_fade_ms: int = 2000            # Fade in/out duration for music
+    intro_audio_path: str | None = None
+    outro_audio_path: str | None = None
+    intro_duration_ms: int = 3000  # How long intro plays before speech
+    outro_duration_ms: int = 3000  # How long outro plays after speech
+    music_volume_db: float = -18.0  # Background music volume during speech
+    music_fade_ms: int = 2000  # Fade in/out duration for music
 
     # Normalization
     target_loudness_dbfs: float = -16.0  # Target overall loudness
     normalize: bool = True
-    sample_rate: int = 44100             # Output sample rate
+    sample_rate: int = 44100  # Output sample rate
 
     # Output
-    output_format: str = "mp3"           # "mp3", "wav", "ogg"
-    bitrate: str = "192k"               # MP3 bitrate
-    channels: int = 1                    # 1=mono, 2=stereo
+    output_format: str = "mp3"  # "mp3", "wav", "ogg"
+    bitrate: str = "192k"  # MP3 bitrate
+    channels: int = 1  # 1=mono, 2=stereo
 
 
 @dataclass
 class TranscriptEntry:
     """A timestamped transcript entry."""
+
     speaker: str
     text: str
     start_ms: float
@@ -90,6 +92,7 @@ class TranscriptEntry:
 @dataclass
 class AudioResult:
     """Final assembled audio output."""
+
     audio_data: bytes
     duration_ms: float
     format: str
@@ -102,6 +105,7 @@ class AudioResult:
 
 
 # ── Helpers ──────────────────────────────────────────────────
+
 
 def format_timestamp(ms: float) -> str:
     """Convert milliseconds to HH:MM:SS.mmm format."""
@@ -116,6 +120,7 @@ def format_timestamp(ms: float) -> str:
 
 # ── Audio Engine ─────────────────────────────────────────────
 
+
 class AudioEngine:
     """
     Production audio assembly engine using pydub.
@@ -126,7 +131,7 @@ class AudioEngine:
     async def assemble(
         self,
         segments: list[AudioSegment],
-        config: Optional[AudioConfig] = None,
+        config: AudioConfig | None = None,
     ) -> AudioResult:
         """
         Assemble multiple audio segments into a single production-ready audio file.
@@ -139,7 +144,6 @@ class AudioEngine:
         5. Export and generate metadata
         """
         from pydub import AudioSegment as PydubSegment
-        from pydub.effects import normalize as pydub_normalize
 
         if not config:
             config = AudioConfig()
@@ -189,9 +193,7 @@ class AudioEngine:
                 if config.crossfade_ms > 0 and len(combined) > config.crossfade_ms:
                     # Add pause then cross-fade
                     if pause_ms > config.crossfade_ms:
-                        silence = PydubSegment.silent(
-                            duration=pause_ms - config.crossfade_ms
-                        )
+                        silence = PydubSegment.silent(duration=pause_ms - config.crossfade_ms)
                         combined = combined + silence
                         current_position_ms += pause_ms - config.crossfade_ms
 
@@ -206,12 +208,14 @@ class AudioEngine:
 
             # Record transcript entry
             segment_duration = len(audio_part)
-            transcript.append(TranscriptEntry(
-                speaker=seg_meta.speaker,
-                text=seg_meta.text,
-                start_ms=current_position_ms,
-                end_ms=current_position_ms + segment_duration,
-            ))
+            transcript.append(
+                TranscriptEntry(
+                    speaker=seg_meta.speaker,
+                    text=seg_meta.text,
+                    start_ms=current_position_ms,
+                    end_ms=current_position_ms + segment_duration,
+                )
+            )
 
             current_position_ms += segment_duration
             prev_speaker = seg_meta.speaker
@@ -243,7 +247,7 @@ class AudioEngine:
         waveform = self._extract_waveform(combined, num_points=200)
 
         # Collect unique speakers
-        speakers = list(set(s.speaker for s in segments if s.speaker))
+        speakers = list({s.speaker for s in segments if s.speaker})
 
         result = AudioResult(
             audio_data=output_data,
@@ -258,8 +262,8 @@ class AudioEngine:
         )
 
         logger.info(
-            f"Audio assembled: {result.duration_ms/1000:.1f}s, "
-            f"{result.file_size_bytes/1024:.0f}KB, "
+            f"Audio assembled: {result.duration_ms / 1000:.1f}s, "
+            f"{result.file_size_bytes / 1024:.0f}KB, "
             f"{result.segments_count} segments, "
             f"{len(speakers)} speakers"
         )
@@ -305,7 +309,7 @@ class AudioEngine:
 
         # Trim
         if len(outro) > config.outro_duration_ms:
-            outro = outro[:config.outro_duration_ms]
+            outro = outro[: config.outro_duration_ms]
 
         # Adjust volume
         outro = outro + config.music_volume_db
@@ -430,13 +434,13 @@ class AudioEngine:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
     @traced("audio.generate_silence")
-    async def generate_silence(self, duration_ms: int, format: str = "mp3") -> bytes:
+    async def generate_silence(self, duration_ms: int, audio_format: str = "mp3") -> bytes:
         """Generate a silence audio segment."""
         from pydub import AudioSegment as PydubSegment
 
         silence = PydubSegment.silent(duration=duration_ms)
         buffer = io.BytesIO()
-        silence.export(buffer, format=format)
+        silence.export(buffer, format=audio_format)
         return buffer.getvalue()
 
     @traced("audio.mix_background")
@@ -450,9 +454,7 @@ class AudioEngine:
         """Mix background music under existing speech audio."""
         from pydub import AudioSegment as PydubSegment
 
-        speech_audio = PydubSegment.from_file(
-            io.BytesIO(speech.audio_data), format=speech.format
-        )
+        speech_audio = PydubSegment.from_file(io.BytesIO(speech.audio_data), format=speech.format)
         music = PydubSegment.from_file(music_path)
 
         # Loop music if needed

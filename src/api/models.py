@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from src.infra.nexus_vault_keys import AuthContext, get_current_user
 from src.infra.nexus_obs_tracing import traced
-from src.exceptions import NotFoundError
+from src.infra.nexus_vault_keys import AuthContext, get_current_user
 
 router = APIRouter(prefix="/models", tags=["AI Models"])
 
 
 # ── Schemas ──────────────────────────────────────────────────
+
 
 class ModelRegister(BaseModel):
     name: str
@@ -22,7 +22,7 @@ class ModelRegister(BaseModel):
     model_type: str
     model_id_string: str
     is_local: bool = False
-    base_url: Optional[str] = None
+    base_url: str | None = None
     max_tokens: int = 4096
     cost_per_1k_input: float = 0.0
     cost_per_1k_output: float = 0.0
@@ -51,21 +51,30 @@ class UsageSummaryResponse(BaseModel):
 
 # ── Endpoints ────────────────────────────────────────────────
 
+
 @router.get("")
 @traced("models.list")
 async def list_models(
     auth: AuthContext = Depends(get_current_user),
-    model_type: Optional[str] = None,
-):
+    model_type: str | None = None,
+) -> list[dict[str, Any]]:
     """List registered AI models."""
     from src.agents.nexus_model_layer import model_manager
 
     models = await model_manager.list_models(auth.tenant_id)
     if model_type:
         models = [m for m in models if m.model_type.value == model_type]
-    return [{"id": m.id, "name": m.name, "provider": m.provider.value,
-             "model_type": m.model_type.value, "model_id_string": m.model_id_string,
-             "is_local": m.is_local} for m in models]
+    return [
+        {
+            "id": m.id,
+            "name": m.name,
+            "provider": m.provider.value,
+            "model_type": m.model_type.value,
+            "model_id_string": m.model_id_string,
+            "is_local": m.is_local,
+        }
+        for m in models
+    ]
 
 
 @router.post("", status_code=201)
@@ -73,7 +82,7 @@ async def list_models(
 async def register_model(
     data: ModelRegister,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Register a new AI model."""
     auth.require_role("admin")
     from src.infra.nexus_data_persist import BaseRepository
@@ -91,13 +100,13 @@ async def register_model(
 async def store_credential(
     data: CredentialStore,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Store an encrypted API credential."""
     auth.require_role("admin")
-    from src.infra.nexus_vault_keys import encrypt_credential
     from src.infra.nexus_data_persist import BaseRepository
+    from src.infra.nexus_vault_keys import encrypt_credential
 
-    encrypted = encrypt_credential(data.api_key)
+    encrypted, salt = encrypt_credential(data.api_key)
     prefix = data.api_key[:4] + "..."
 
     repo = BaseRepository("ai_credentials")
@@ -106,6 +115,7 @@ async def store_credential(
             "provider": data.provider,
             "credential_name": data.credential_name,
             "encrypted_key": encrypted,
+            "argon2_salt": salt,
             "key_prefix": prefix,
         },
         tenant_id=auth.tenant_id,
@@ -119,7 +129,7 @@ async def store_credential(
 async def set_default_model(
     data: DefaultModelSet,
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Set a model as default for a task type."""
     auth.require_role("admin")
     from src.infra.nexus_data_persist import BaseRepository
@@ -141,7 +151,7 @@ async def set_default_model(
 async def usage_summary(
     auth: AuthContext = Depends(get_current_user),
     period_days: int = 30,
-):
+) -> dict[str, Any]:
     """Get AI usage summary for the current tenant."""
     from src.infra.nexus_cost_tracker import cost_tracker
 
@@ -157,7 +167,7 @@ async def usage_summary(
 @traced("models.budget_check")
 async def budget_check(
     auth: AuthContext = Depends(get_current_user),
-):
+) -> dict[str, Any]:
     """Check current budget status."""
     from src.infra.nexus_cost_tracker import cost_tracker
 

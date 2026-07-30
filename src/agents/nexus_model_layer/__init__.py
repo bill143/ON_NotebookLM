@@ -21,14 +21,14 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Optional, Union
+from typing import Any, cast
 
 from loguru import logger
 
 from src.exceptions import (
-    AIProviderError,
     ModelNotFoundError,
     ProviderAuthError,
     ProviderTimeoutError,
@@ -36,8 +36,8 @@ from src.exceptions import (
     classify_error,
 )
 
-
 # ── Enums ────────────────────────────────────────────────────
+
 
 class ModelType(str, Enum):
     CHAT = "chat"
@@ -61,16 +61,18 @@ class Provider(str, Enum):
 
 # ── Data Classes ─────────────────────────────────────────────
 
+
 @dataclass
 class ModelConfig:
     """Configuration for a registered AI model."""
+
     id: str
     name: str
     provider: Provider
     model_type: ModelType
-    model_id_string: str          # e.g. "gpt-4o", "claude-3-opus", "llama3.1:8b"
+    model_id_string: str  # e.g. "gpt-4o", "claude-3-opus", "llama3.1:8b"
     is_local: bool = False
-    base_url: Optional[str] = None
+    base_url: str | None = None
     max_tokens: int = 4096
     supports_streaming: bool = True
     supports_function_calling: bool = False
@@ -82,6 +84,7 @@ class ModelConfig:
 @dataclass
 class AIResponse:
     """Standardized response from any AI provider."""
+
     content: str
     model: str
     provider: str
@@ -97,6 +100,7 @@ class AIResponse:
 @dataclass
 class EmbeddingResponse:
     """Standardized embedding response."""
+
     embeddings: list[list[float]]
     model: str
     provider: str
@@ -107,6 +111,7 @@ class EmbeddingResponse:
 @dataclass
 class TTSResponse:
     """Standardized TTS response."""
+
     audio_data: bytes
     model: str
     provider: str
@@ -117,10 +122,11 @@ class TTSResponse:
 
 # ── Abstract Provider Interface ──────────────────────────────
 
+
 class BaseLLMProvider(ABC):
     """Abstract interface for language model providers."""
 
-    def __init__(self, config: ModelConfig, api_key: Optional[str] = None) -> None:
+    def __init__(self, config: ModelConfig, api_key: str | None = None) -> None:
         self.config = config
         self.api_key = api_key
 
@@ -129,10 +135,10 @@ class BaseLLMProvider(ABC):
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-        stop: Optional[list[str]] = None,
-        response_format: Optional[dict] = None,
+        stop: list[str] | None = None,
+        response_format: dict | None = None,
     ) -> AIResponse:
         """Generate a completion from messages."""
         ...
@@ -142,9 +148,9 @@ class BaseLLMProvider(ABC):
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         """Stream a completion token by token."""
         ...
 
@@ -152,7 +158,7 @@ class BaseLLMProvider(ABC):
 class BaseEmbeddingProvider(ABC):
     """Abstract interface for embedding providers."""
 
-    def __init__(self, config: ModelConfig, api_key: Optional[str] = None) -> None:
+    def __init__(self, config: ModelConfig, api_key: str | None = None) -> None:
         self.config = config
         self.api_key = api_key
 
@@ -165,7 +171,7 @@ class BaseEmbeddingProvider(ABC):
 class BaseTTSProvider(ABC):
     """Abstract interface for TTS providers (ADR-4)."""
 
-    def __init__(self, config: ModelConfig, api_key: Optional[str] = None) -> None:
+    def __init__(self, config: ModelConfig, api_key: str | None = None) -> None:
         self.config = config
         self.api_key = api_key
 
@@ -176,13 +182,14 @@ class BaseTTSProvider(ABC):
         *,
         voice: str = "default",
         speed: float = 1.0,
-        format: str = "mp3",
+        audio_format: str = "mp3",
     ) -> TTSResponse:
         """Synthesize speech from text."""
         ...
 
 
 # ── Concrete Providers ───────────────────────────────────────
+
 
 class OpenAIProvider(BaseLLMProvider):
     """OpenAI GPT provider (also handles Ollama via OpenAI-compatible API — ADR-7)."""
@@ -191,10 +198,10 @@ class OpenAIProvider(BaseLLMProvider):
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-        stop: Optional[list[str]] = None,
-        response_format: Optional[dict] = None,
+        stop: list[str] | None = None,
+        response_format: dict | None = None,
     ) -> AIResponse:
         import openai
 
@@ -207,7 +214,7 @@ class OpenAIProvider(BaseLLMProvider):
         try:
             kwargs: dict[str, Any] = {
                 "model": self.config.model_id_string,
-                "messages": messages,
+                "messages": cast(Any, messages),
                 "max_tokens": max_tokens or self.config.max_tokens,
                 "temperature": temperature,
             }
@@ -234,22 +241,22 @@ class OpenAIProvider(BaseLLMProvider):
                 finish_reason=choice.finish_reason or "stop",
             )
         except openai.RateLimitError as e:
-            raise RateLimitError(str(e), original_error=e)
+            raise RateLimitError(str(e), original_error=e) from e
         except openai.AuthenticationError as e:
-            raise ProviderAuthError(str(e), original_error=e)
+            raise ProviderAuthError(str(e), original_error=e) from e
         except openai.APITimeoutError as e:
-            raise ProviderTimeoutError(str(e), original_error=e)
+            raise ProviderTimeoutError(str(e), original_error=e) from e
         except Exception as e:
-            error_cls, msg = classify_error(e)
-            raise error_cls(msg, original_error=e)
+            error_cls, err_msg = classify_error(e)
+            raise error_cls(err_msg, original_error=e) from e
 
-    async def stream(
+    async def stream(  # type: ignore[override]  # async generator vs ABC async method typing
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         import openai
 
         client = openai.AsyncOpenAI(
@@ -259,13 +266,13 @@ class OpenAIProvider(BaseLLMProvider):
 
         response = await client.chat.completions.create(
             model=self.config.model_id_string,
-            messages=messages,
+            messages=cast(Any, messages),
             max_tokens=max_tokens or self.config.max_tokens,
             temperature=temperature,
             stream=True,
         )
 
-        async for chunk in response:
+        async for chunk in cast(AsyncIterable[Any], response):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
@@ -274,7 +281,7 @@ class OpenAIProvider(BaseLLMProvider):
             return 0.0
         input_cost = (usage.prompt_tokens / 1000) * self.config.cost_per_1k_input
         output_cost = (usage.completion_tokens / 1000) * self.config.cost_per_1k_output
-        return round(input_cost + output_cost, 6)
+        return float(round(input_cost + output_cost, 6))
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -284,10 +291,10 @@ class AnthropicProvider(BaseLLMProvider):
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-        stop: Optional[list[str]] = None,
-        response_format: Optional[dict] = None,
+        stop: list[str] | None = None,
+        response_format: dict | None = None,
     ) -> AIResponse:
         import anthropic
 
@@ -296,11 +303,11 @@ class AnthropicProvider(BaseLLMProvider):
         # Extract system message
         system_msg = ""
         chat_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_msg = msg["content"]
+        for message in messages:
+            if message["role"] == "system":
+                system_msg = message["content"]
             else:
-                chat_messages.append(msg)
+                chat_messages.append(message)
 
         start = time.perf_counter()
         try:
@@ -334,31 +341,31 @@ class AnthropicProvider(BaseLLMProvider):
                 finish_reason=response.stop_reason or "stop",
             )
         except anthropic.RateLimitError as e:
-            raise RateLimitError(str(e), original_error=e)
+            raise RateLimitError(str(e), original_error=e) from e
         except anthropic.AuthenticationError as e:
-            raise ProviderAuthError(str(e), original_error=e)
+            raise ProviderAuthError(str(e), original_error=e) from e
         except Exception as e:
-            error_cls, msg = classify_error(e)
-            raise error_cls(msg, original_error=e)
+            error_cls, err_msg = classify_error(e)
+            raise error_cls(err_msg, original_error=e) from e
 
-    async def stream(
+    async def stream(  # type: ignore[override]  # async generator vs ABC async method typing
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=self.api_key)
 
         system_msg = ""
         chat_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_msg = msg["content"]
+        for message in messages:
+            if message["role"] == "system":
+                system_msg = message["content"]
             else:
-                chat_messages.append(msg)
+                chat_messages.append(message)
 
         kwargs: dict[str, Any] = {
             "model": self.config.model_id_string,
@@ -376,7 +383,7 @@ class AnthropicProvider(BaseLLMProvider):
     def _calculate_cost(self, usage: Any) -> float:
         input_cost = (usage.input_tokens / 1000) * self.config.cost_per_1k_input
         output_cost = (usage.output_tokens / 1000) * self.config.cost_per_1k_output
-        return round(input_cost + output_cost, 6)
+        return float(round(input_cost + output_cost, 6))
 
 
 class GoogleProvider(BaseLLMProvider):
@@ -386,10 +393,10 @@ class GoogleProvider(BaseLLMProvider):
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-        stop: Optional[list[str]] = None,
-        response_format: Optional[dict] = None,
+        stop: list[str] | None = None,
+        response_format: dict | None = None,
     ) -> AIResponse:
         from google import genai
 
@@ -398,28 +405,28 @@ class GoogleProvider(BaseLLMProvider):
         # Convert messages to Gemini format
         system_instruction = None
         contents = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_instruction = msg["content"]
+        for message in messages:
+            if message["role"] == "system":
+                system_instruction = message["content"]
             else:
-                role = "user" if msg["role"] == "user" else "model"
-                contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+                role = "user" if message["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": message["content"]}]})
 
         start = time.perf_counter()
         try:
-            config = {
+            gen_config: dict[str, Any] = {
                 "max_output_tokens": max_tokens or self.config.max_tokens,
                 "temperature": temperature,
             }
             if stop:
-                config["stop_sequences"] = stop
+                gen_config["stop_sequences"] = stop
             if system_instruction:
-                config["system_instruction"] = system_instruction
+                gen_config["system_instruction"] = system_instruction
 
             response = await client.aio.models.generate_content(
                 model=self.config.model_id_string,
-                contents=contents,
-                config=config,
+                contents=cast(Any, contents),
+                config=cast(Any, gen_config),
             )
             latency = (time.perf_counter() - start) * 1000
 
@@ -435,40 +442,40 @@ class GoogleProvider(BaseLLMProvider):
                 finish_reason="stop",
             )
         except Exception as e:
-            error_cls, msg = classify_error(e)
-            raise error_cls(msg, original_error=e)
+            error_cls, err_msg = classify_error(e)
+            raise error_cls(err_msg, original_error=e) from e
 
-    async def stream(
+    async def stream(  # type: ignore[override]  # async generator vs ABC async method typing
         self,
         messages: list[dict[str, str]],
         *,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         from google import genai
 
         client = genai.Client(api_key=self.api_key)
 
         system_instruction = None
         contents = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_instruction = msg["content"]
+        for message in messages:
+            if message["role"] == "system":
+                system_instruction = message["content"]
             else:
-                role = "user" if msg["role"] == "user" else "model"
-                contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+                role = "user" if message["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": message["content"]}]})
 
-        config: dict[str, Any] = {
+        stream_config: dict[str, Any] = {
             "max_output_tokens": max_tokens or self.config.max_tokens,
             "temperature": temperature,
         }
         if system_instruction:
-            config["system_instruction"] = system_instruction
+            stream_config["system_instruction"] = system_instruction
 
         async for chunk in await client.aio.models.generate_content_stream(
             model=self.config.model_id_string,
-            contents=contents,
-            config=config,
+            contents=cast(Any, contents),
+            config=cast(Any, stream_config),
         ):
             if chunk.text:
                 yield chunk.text
@@ -513,7 +520,7 @@ class OpenAITTSProvider(BaseTTSProvider):
         *,
         voice: str = "alloy",
         speed: float = 1.0,
-        format: str = "mp3",
+        audio_format: str = "mp3",
     ) -> TTSResponse:
         import openai
 
@@ -528,7 +535,7 @@ class OpenAITTSProvider(BaseTTSProvider):
             voice=voice,
             input=text,
             speed=speed,
-            response_format=format,
+            response_format=cast(Any, audio_format),
         )
         latency = (time.perf_counter() - start) * 1000
 
@@ -538,12 +545,13 @@ class OpenAITTSProvider(BaseTTSProvider):
             audio_data=audio_data,
             model=self.config.model_id_string,
             provider=self.config.provider.value,
-            format=format,
+            format=audio_format,
             latency_ms=latency,
         )
 
 
 # ── AI Factory (The Esperanto Pattern) ───────────────────────
+
 
 class AIFactory:
     """
@@ -556,7 +564,7 @@ class AIFactory:
 
     _llm_providers: dict[Provider, type[BaseLLMProvider]] = {
         Provider.OPENAI: OpenAIProvider,
-        Provider.OLLAMA: OpenAIProvider,      # Same interface, different base_url (ADR-7)
+        Provider.OLLAMA: OpenAIProvider,  # Same interface, different base_url (ADR-7)
         Provider.ANTHROPIC: AnthropicProvider,
         Provider.GOOGLE: GoogleProvider,
     }
@@ -568,11 +576,11 @@ class AIFactory:
 
     _tts_providers: dict[Provider, type[BaseTTSProvider]] = {
         Provider.OPENAI: OpenAITTSProvider,
-        Provider.KOKORO: OpenAITTSProvider,   # Kokoro exposes OpenAI-compatible API (ADR-7)
+        Provider.KOKORO: OpenAITTSProvider,  # Kokoro exposes OpenAI-compatible API (ADR-7)
     }
 
     @classmethod
-    def create_llm(cls, config: ModelConfig, api_key: Optional[str] = None) -> BaseLLMProvider:
+    def create_llm(cls, config: ModelConfig, api_key: str | None = None) -> BaseLLMProvider:
         """Create a language model provider instance."""
         provider_cls = cls._llm_providers.get(config.provider)
         if not provider_cls:
@@ -583,28 +591,25 @@ class AIFactory:
 
     @classmethod
     def create_embedding(
-        cls, config: ModelConfig, api_key: Optional[str] = None
+        cls, config: ModelConfig, api_key: str | None = None
     ) -> BaseEmbeddingProvider:
         """Create an embedding provider instance."""
         provider_cls = cls._embedding_providers.get(config.provider)
         if not provider_cls:
-            raise ModelNotFoundError(
-                f"No embedding provider for '{config.provider.value}'"
-            )
+            raise ModelNotFoundError(f"No embedding provider for '{config.provider.value}'")
         return provider_cls(config, api_key)
 
     @classmethod
-    def create_tts(cls, config: ModelConfig, api_key: Optional[str] = None) -> BaseTTSProvider:
+    def create_tts(cls, config: ModelConfig, api_key: str | None = None) -> BaseTTSProvider:
         """Create a TTS provider instance."""
         provider_cls = cls._tts_providers.get(config.provider)
         if not provider_cls:
-            raise ModelNotFoundError(
-                f"No TTS provider for '{config.provider.value}'"
-            )
+            raise ModelNotFoundError(f"No TTS provider for '{config.provider.value}'")
         return provider_cls(config, api_key)
 
 
 # ── Model Manager ────────────────────────────────────────────
+
 
 class ModelManager:
     """
@@ -619,9 +624,10 @@ class ModelManager:
 
     def __init__(self) -> None:
         from src.infra import nexus_data_persist as db
+
         self._db = db
 
-    async def get_model(self, model_id: str, tenant_id: Optional[str] = None) -> ModelConfig:
+    async def get_model(self, model_id: str, tenant_id: str | None = None) -> ModelConfig:
         """Retrieve a registered model configuration."""
         repo = self._db.BaseRepository("ai_models")
         data = await repo.get_by_id(model_id, tenant_id)
@@ -631,12 +637,12 @@ class ModelManager:
 
     async def list_models(
         self,
-        tenant_id: Optional[str] = None,
-        model_type: Optional[ModelType] = None,
+        tenant_id: str | None = None,
+        model_type: ModelType | None = None,
     ) -> list[ModelConfig]:
         """List available models, optionally filtered by type."""
         repo = self._db.BaseRepository("ai_models")
-        filters = {"is_active": True}
+        filters: dict[str, Any] = {"is_active": True}
         if model_type:
             filters["model_type"] = model_type.value
         rows = await repo.list_all(tenant_id, filters=filters)
@@ -645,7 +651,7 @@ class ModelManager:
     async def get_default_model(
         self,
         task_type: str,
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> ModelConfig:
         """
         Get the default model for a task type with fallback chain.
@@ -672,6 +678,7 @@ class ModelManager:
 
         async with db.get_session(tenant_id) as session:
             from sqlalchemy import text
+
             result = await session.execute(text(query), params)
             row = result.mappings().first()
 
@@ -686,21 +693,19 @@ class ModelManager:
             )
             return await self.get_default_model("chat", tenant_id)
 
-        raise ModelNotFoundError(
-            f"No default model configured for task type '{task_type}'"
-        )
+        raise ModelNotFoundError(f"No default model configured for task type '{task_type}'")
 
     async def get_credential(
         self,
         provider: str,
-        tenant_id: Optional[str] = None,
-    ) -> Optional[str]:
+        tenant_id: str | None = None,
+    ) -> str | None:
         """Retrieve decrypted API key for a provider."""
         from src.infra import nexus_data_persist as db
         from src.infra.nexus_vault_keys import decrypt_credential
 
         query = """
-            SELECT encrypted_key FROM ai_credentials
+            SELECT encrypted_key, argon2_salt FROM ai_credentials
             WHERE provider = :provider AND is_active = true
         """
         params: dict[str, Any] = {"provider": provider}
@@ -715,18 +720,20 @@ class ModelManager:
 
         async with db.get_session(tenant_id) as session:
             from sqlalchemy import text
+
             result = await session.execute(text(query), params)
             row = result.mappings().first()
 
         if row:
-            return decrypt_credential(row["encrypted_key"])
+            salt = row.get("argon2_salt")
+            return decrypt_credential(row["encrypted_key"], salt=salt)
         return None
 
     async def provision_llm(
         self,
-        model_id: Optional[str] = None,
+        model_id: str | None = None,
         task_type: str = "chat",
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> BaseLLMProvider:
         """
         Provision a ready-to-use LLM provider.
@@ -753,8 +760,8 @@ class ModelManager:
 
     async def provision_embedding(
         self,
-        model_id: Optional[str] = None,
-        tenant_id: Optional[str] = None,
+        model_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> BaseEmbeddingProvider:
         """Provision a ready-to-use embedding provider."""
         if model_id:
@@ -767,8 +774,8 @@ class ModelManager:
 
     async def provision_tts(
         self,
-        model_id: Optional[str] = None,
-        tenant_id: Optional[str] = None,
+        model_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> BaseTTSProvider:
         """Provision a ready-to-use TTS provider."""
         if model_id:

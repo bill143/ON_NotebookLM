@@ -13,37 +13,38 @@ Provides:
 from __future__ import annotations
 
 import base64
-import io
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, cast
 
 from loguru import logger
 
-from src.infra.nexus_obs_tracing import traced
-from src.infra.nexus_cost_tracker import cost_tracker, UsageRecord
 from src.exceptions import AIProviderError, ValidationError
-
+from src.infra.nexus_cost_tracker import UsageRecord, cost_tracker
+from src.infra.nexus_obs_tracing import traced
 
 # ── Types ────────────────────────────────────────────────────
+
 
 @dataclass
 class ImageInput:
     """An image to be analyzed."""
-    source: str                     # "file", "url", "base64", "pdf_page"
-    data: str | bytes               # File path, URL, base64 string, or raw bytes
+
+    source: str  # "file", "url", "base64", "pdf_page"
+    data: str | bytes  # File path, URL, base64 string, or raw bytes
     mime_type: str = "image/png"
-    page_number: Optional[int] = None
-    description_hint: str = ""      # Optional hint for analysis focus
+    page_number: int | None = None
+    description_hint: str = ""  # Optional hint for analysis focus
 
 
 @dataclass
 class VisionResult:
     """Result from analyzing a single image."""
+
     description: str
-    diagram_type: Optional[str] = None     # "flowchart", "table", "chart", "photo", etc.
-    extracted_text: str = ""                # OCR / text from image
+    diagram_type: str | None = None  # "flowchart", "table", "chart", "photo", etc.
+    extracted_text: str = ""  # OCR / text from image
     structured_data: dict[str, Any] = field(default_factory=dict)
     key_entities: list[str] = field(default_factory=list)
     confidence: float = 0.0
@@ -65,6 +66,7 @@ class VisionResult:
 @dataclass
 class DocumentVisionResult:
     """Result from analyzing an entire document's visuals."""
+
     pages: list[VisionResult] = field(default_factory=list)
     summary: str = ""
     total_images: int = 0
@@ -73,6 +75,7 @@ class DocumentVisionResult:
 
 
 # ── Image Preparation ───────────────────────────────────────
+
 
 class ImageEncoder:
     """Converts image inputs to base64 for API consumption."""
@@ -119,7 +122,9 @@ class ImageEncoder:
 
         elif image.source == "pdf_page":
             # Raw bytes from PDF extraction
-            data_bytes = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
+            data_bytes = (
+                image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
+            )
             b64 = base64.b64encode(data_bytes).decode("utf-8")
             return f"data:{image.mime_type};base64,{b64}"
 
@@ -144,7 +149,7 @@ class ImageEncoder:
             # Get page images
             image_list = page.get_images(full=True)
 
-            for img_idx, img_info in enumerate(image_list):
+            for _img_idx, img_info in enumerate(image_list):
                 xref = img_info[0]
                 try:
                     pix = fitz.Pixmap(doc, xref)
@@ -152,13 +157,15 @@ class ImageEncoder:
                         pix = fitz.Pixmap(fitz.csRGB, pix)
                     img_bytes = pix.tobytes("png")
 
-                    images.append(ImageInput(
-                        source="pdf_page",
-                        data=img_bytes,
-                        mime_type="image/png",
-                        page_number=page_idx + 1,
-                        description_hint=f"Image from page {page_idx + 1}",
-                    ))
+                    images.append(
+                        ImageInput(
+                            source="pdf_page",
+                            data=img_bytes,
+                            mime_type="image/png",
+                            page_number=page_idx + 1,
+                            description_hint=f"Image from page {page_idx + 1}",
+                        )
+                    )
                 except Exception as e:
                     logger.debug(f"Skipping PDF image (page {page_idx + 1}): {e}")
 
@@ -167,13 +174,15 @@ class ImageEncoder:
                 try:
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x resolution
                     img_bytes = pix.tobytes("png")
-                    images.append(ImageInput(
-                        source="pdf_page",
-                        data=img_bytes,
-                        mime_type="image/png",
-                        page_number=page_idx + 1,
-                        description_hint=f"Page {page_idx + 1} render",
-                    ))
+                    images.append(
+                        ImageInput(
+                            source="pdf_page",
+                            data=img_bytes,
+                            mime_type="image/png",
+                            page_number=page_idx + 1,
+                            description_hint=f"Page {page_idx + 1} render",
+                        )
+                    )
                 except Exception as e:
                     logger.debug(f"Skipping page render {page_idx + 1}: {e}")
 
@@ -182,6 +191,7 @@ class ImageEncoder:
 
 
 # ── Vision Analysis Engine ───────────────────────────────────
+
 
 class VisionAgent:
     """
@@ -267,7 +277,7 @@ Return as JSON with:
 
         try:
             response = await llm.generate(
-                messages,
+                cast(list[dict[str, str]], messages),
                 temperature=0.2,
                 max_tokens=2000,
                 response_format={"type": "json_object"},
@@ -276,17 +286,19 @@ Return as JSON with:
             result_data = json.loads(response.content)
 
             # Record usage
-            await cost_tracker.record_usage(UsageRecord(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                model_name=response.model,
-                provider="",
-                feature_id="4C",
-                agent_id="vision_agent",
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                cost_usd=response.cost_usd,
-            ))
+            await cost_tracker.record_usage(
+                UsageRecord(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    model_name=response.model,
+                    provider="",
+                    feature_id="4C",
+                    agent_id="vision_agent",
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    cost_usd=response.cost_usd,
+                )
+            )
 
             return VisionResult(
                 description=result_data.get("description", ""),
@@ -309,7 +321,7 @@ Return as JSON with:
             )
         except Exception as e:
             logger.error(f"Vision analysis failed: {e}")
-            raise AIProviderError(f"Vision analysis failed: {e}")
+            raise AIProviderError(f"Vision analysis failed: {e}") from e
 
     @traced("vision.analyze_batch")
     async def analyze_batch(
@@ -324,25 +336,29 @@ Return as JSON with:
         import asyncio
 
         semaphore = asyncio.Semaphore(concurrency)
-        results: list[VisionResult] = []
 
         async def process_one(img: ImageInput) -> VisionResult:
             async with semaphore:
-                return await self.analyze_image(
-                    img, tenant_id=tenant_id, user_id=user_id
+                return cast(
+                    VisionResult,
+                    await self.analyze_image(img, tenant_id=tenant_id, user_id=user_id),
                 )
 
         tasks = [process_one(img) for img in images]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        raw_results: list[VisionResult | BaseException] = await asyncio.gather(
+            *tasks, return_exceptions=True
+        )
 
         final: list[VisionResult] = []
-        for r in results:
-            if isinstance(r, Exception):
+        for r in raw_results:
+            if isinstance(r, BaseException):
                 logger.warning(f"Batch vision item failed: {r}")
-                final.append(VisionResult(
-                    description=f"Analysis failed: {str(r)[:100]}",
-                    confidence=0.0,
-                ))
+                final.append(
+                    VisionResult(
+                        description=f"Analysis failed: {str(r)[:100]}",
+                        confidence=0.0,
+                    )
+                )
             else:
                 final.append(r)
 
@@ -368,9 +384,7 @@ Return as JSON with:
             return DocumentVisionResult(summary="No images found in document")
 
         logger.info(f"Analyzing {len(images)} images from {pdf_path}")
-        page_results = await self.analyze_batch(
-            images, tenant_id=tenant_id, user_id=user_id
-        )
+        page_results = await self.analyze_batch(images, tenant_id=tenant_id, user_id=user_id)
 
         # Generate document-level summary
         total_tokens = sum(r.tokens_used for r in page_results)
@@ -381,6 +395,7 @@ Return as JSON with:
         ]
 
         from src.agents.nexus_model_layer import model_manager
+
         llm = await model_manager.provision_llm(
             task_type="transformation",
             tenant_id=tenant_id,
@@ -420,7 +435,7 @@ Return as JSON with:
         result = await self.analyze_image(
             image, tenant_id=tenant_id, user_id=user_id, analysis_type="table"
         )
-        return result.structured_data
+        return cast(dict[str, Any], result.structured_data)
 
     @traced("vision.extract_chart")
     async def extract_chart(
@@ -434,7 +449,7 @@ Return as JSON with:
         result = await self.analyze_image(
             image, tenant_id=tenant_id, user_id=user_id, analysis_type="chart"
         )
-        return result.structured_data
+        return cast(dict[str, Any], result.structured_data)
 
 
 # Global singleton
