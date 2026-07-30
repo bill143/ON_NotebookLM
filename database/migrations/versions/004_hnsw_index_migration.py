@@ -26,33 +26,36 @@ def upgrade() -> None:
     # use IF EXISTS to be idempotent across partial runs.
     op.execute("DROP INDEX IF EXISTS idx_embeddings_vector")
 
-    # CREATE the HNSW index CONCURRENTLY (zero-downtime).
-    # m=16 gives good recall/speed balance; ef_construction=200 is the
-    # pgvector team's recommended default for production workloads.
-    op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_hnsw "
-        "ON source_embeddings "
-        "USING hnsw (embedding vector_cosine_ops) "
-        "WITH (m = 16, ef_construction = 200)"
-    )
+    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block —
+    # alembic wraps migrations in one, so these need an autocommit block.
+    with op.get_context().autocommit_block():
+        # m=16 gives good recall/speed balance; ef_construction=200 is the
+        # pgvector team's recommended default for production workloads.
+        op.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_hnsw "
+            "ON source_embeddings "
+            "USING hnsw (embedding vector_cosine_ops) "
+            "WITH (m = 16, ef_construction = 200)"
+        )
 
-    # ADD a composite tenant index for RLS-filtered ANN queries.
-    # Without this, every RLS-scoped vector search requires a sequential
-    # bitmap filter on tenant_id.
-    op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_tenant "
-        "ON source_embeddings (tenant_id, source_id)"
-    )
+        # ADD a composite tenant index for RLS-filtered ANN queries.
+        # Without this, every RLS-scoped vector search requires a sequential
+        # bitmap filter on tenant_id.
+        op.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_tenant "
+            "ON source_embeddings (tenant_id, source_id)"
+        )
 
 
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS idx_embeddings_tenant")
     op.execute("DROP INDEX IF EXISTS idx_embeddings_hnsw")
 
-    # Restore the original IVFFlat index.
-    op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_vector "
-        "ON source_embeddings "
-        "USING ivfflat (embedding vector_cosine_ops) "
-        "WITH (lists = 100)"
-    )
+    # Restore the original IVFFlat index (autocommit for CONCURRENTLY).
+    with op.get_context().autocommit_block():
+        op.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_vector "
+            "ON source_embeddings "
+            "USING ivfflat (embedding vector_cosine_ops) "
+            "WITH (lists = 100)"
+        )

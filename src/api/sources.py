@@ -60,12 +60,14 @@ class SourceFromURL(BaseModel):
     url: str = Field(..., max_length=2048)
     title: str | None = None
     source_type: str = "url"
+    notebook_id: str | None = None
 
 
 class SourceFromText(BaseModel):
     content: str = Field(..., min_length=1, max_length=500_000)
     title: str = "Pasted Text"
     source_type: str = "pasted_text"
+    notebook_id: str | None = None
 
 
 class SourceResponse(BaseModel):
@@ -98,11 +100,29 @@ class SearchRequest(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────
 
 
+async def _link_to_notebook(notebook_id: str, source_id: str, tenant_id: str) -> None:
+    """Attach a source to a notebook via the notebook_sources join table."""
+    from sqlalchemy import text
+
+    from src.infra.nexus_data_persist import get_session
+
+    async with get_session(tenant_id) as session:
+        await session.execute(
+            text("""
+                INSERT INTO notebook_sources (notebook_id, source_id)
+                VALUES (:notebook_id, :source_id)
+                ON CONFLICT DO NOTHING
+            """),
+            {"notebook_id": notebook_id, "source_id": source_id},
+        )
+
+
 @router.post("/upload", response_model=SourceResponse, status_code=201)
 @traced("sources.upload")
 async def upload_source(
     file: UploadFile = File(...),
     title: str | None = Form(None),
+    notebook_id: str | None = Form(None),
     auth: AuthContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Upload a file source for processing."""
@@ -162,6 +182,9 @@ async def upload_source(
         tenant_id=auth.tenant_id,
     )
 
+    if notebook_id:
+        await _link_to_notebook(notebook_id, result["id"], auth.tenant_id)
+
     # Enqueue async processing (extract text, embed, generate insights)
     from src.worker import process_source as process_source_task
 
@@ -193,6 +216,14 @@ async def create_from_url(
         tenant_id=auth.tenant_id,
     )
 
+    if data.notebook_id:
+        await _link_to_notebook(data.notebook_id, result["id"], auth.tenant_id)
+
+    # Enqueue async processing — without this, URL sources stay "pending" forever
+    from src.worker import process_source as process_source_task
+
+    process_source_task.delay(result["id"], auth.tenant_id)
+
     return result
 
 
@@ -217,6 +248,9 @@ async def create_from_text(
         },
         tenant_id=auth.tenant_id,
     )
+
+    if data.notebook_id:
+        await _link_to_notebook(data.notebook_id, result["id"], auth.tenant_id)
 
     return result
 

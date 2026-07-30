@@ -193,6 +193,14 @@ class BaseRepository:
         self._has_soft_delete = table_name in self._SOFT_DELETE_TABLES
         self._has_updated_at = table_name not in self._NO_UPDATED_AT
 
+    @staticmethod
+    def _adapt_params(data: dict[str, Any]) -> dict[str, Any]:
+        """asyncpg can't bind a Python dict to a JSONB column — serialize dicts
+        to JSON text. Lists stay as-is: TEXT[] columns need real lists."""
+        import json
+
+        return {k: json.dumps(v) if isinstance(v, dict) else v for k, v in data.items()}
+
     async def create(
         self,
         data: dict[str, Any],
@@ -222,7 +230,7 @@ class BaseRepository:
                 text(
                     f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"  # noqa: S608 — table_name validated by _validate_identifier; values use :param binding
                 ),
-                data,
+                self._adapt_params(data),
             )
             logger.debug(f"Created record in {self.table_name}", record_id=record_id)
 
@@ -308,7 +316,7 @@ class BaseRepository:
         query += " RETURNING *"
 
         async with get_session(tenant_id) as session:
-            result = await session.execute(text(query), params)
+            result = await session.execute(text(query), self._adapt_params(params))
             row = result.mappings().first()
             if row:
                 logger.debug(f"Updated record in {self.table_name}", record_id=record_id)
@@ -405,6 +413,38 @@ class BaseRepository:
 class NotebookRepository(BaseRepository):
     def __init__(self) -> None:
         super().__init__("notebooks")
+
+    async def list_with_counts(
+        self,
+        tenant_id: str,
+        *,
+        user_id: str,
+        archived: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List notebooks with live source counts for the sidebar."""
+        query = """
+            SELECT n.*, COUNT(s.id) AS source_count
+            FROM notebooks n
+            LEFT JOIN notebook_sources ns ON n.id = ns.notebook_id
+            LEFT JOIN sources s ON ns.source_id = s.id AND s.deleted_at IS NULL
+            WHERE n.tenant_id = :tenant_id AND n.user_id = :user_id
+              AND n.archived = :archived AND n.deleted_at IS NULL
+            GROUP BY n.id
+            ORDER BY n.pinned DESC, n.updated_at DESC
+            LIMIT :limit OFFSET :offset
+        """
+        params = {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "archived": archived,
+            "limit": limit,
+            "offset": offset,
+        }
+        async with get_session(tenant_id) as session:
+            result = await session.execute(text(query), params)
+            return [_stringify_uuids(dict(row)) for row in result.mappings().all()]
 
     async def get_with_sources(self, notebook_id: str, tenant_id: str) -> dict | None:
         query = """

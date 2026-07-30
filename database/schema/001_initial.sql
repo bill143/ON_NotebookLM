@@ -234,6 +234,7 @@ CREATE TABLE sessions (
     title VARCHAR(500),
     model_override VARCHAR(255),
     context_config JSONB DEFAULT '{}',
+    checkpoint_data JSONB DEFAULT '{}',
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

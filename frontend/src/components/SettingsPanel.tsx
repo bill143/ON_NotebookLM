@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
@@ -34,9 +35,24 @@ export function SettingsPanel() {
     anthropic: "",
   });
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaveError(null);
+    try {
+      const entries = Object.entries(apiKeys).filter(([, key]) => key.trim());
+      for (const [provider, key] of entries) {
+        await api.storeCredential(provider, key.trim());
+      }
+      if (entries.length > 0) {
+        // Stored encrypted server-side; don't keep plaintext in component state.
+        setApiKeys({ openai: "", google: "", elevenlabs: "", anthropic: "" });
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Failed to save settings");
+    }
   };
 
   const sections = [
@@ -295,6 +311,9 @@ export function SettingsPanel() {
                 </>
               )}
             </button>
+            {saveError && (
+              <p className="text-xs text-red-500 mt-2">{saveError}</p>
+            )}
           </div>
         </div>
       </div>

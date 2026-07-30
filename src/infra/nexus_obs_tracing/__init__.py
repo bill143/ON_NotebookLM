@@ -54,7 +54,19 @@ def _redact_sensitive(record: dict) -> dict:
 
 
 def _json_formatter(record: dict) -> str:
-    """Format log records as JSON with trace context."""
+    """Loguru format callable: stash serialized JSON in extra and return a template.
+
+    Loguru treats a callable format's return value as a format TEMPLATE and runs
+    format_map() on it — returning raw JSON here makes every '{' a field reference
+    (KeyError: '"timestamp"' on every log line). The documented pattern is to
+    serialize into record["extra"] and reference it from the template.
+    """
+    record["extra"]["_serialized"] = _serialize_record(record)
+    return "{extra[_serialized]}\n"
+
+
+def _serialize_record(record: dict) -> str:
+    """Serialize a log record as a JSON line with trace context."""
     import json
 
     log_entry = {
@@ -74,11 +86,11 @@ def _json_formatter(record: dict) -> str:
     if record.get("exception"):
         log_entry["exception"] = str(record["exception"])
 
-    extra = record.get("extra", {})
+    extra = {k: v for k, v in record.get("extra", {}).items() if k != "_serialized"}
     if extra:
         log_entry["extra"] = {k: str(v)[:500] for k, v in extra.items()}
 
-    return json.dumps(log_entry) + "\n"
+    return json.dumps(log_entry)
 
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:

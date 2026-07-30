@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "003_argon2_salt"
-down_revision = "002_phase2_phase3_tables"
+down_revision = "002_phase2_phase3"
 branch_labels = None
 depends_on = None
 

@@ -12,6 +12,7 @@ from src.infra.nexus_obs_tracing import (
     MetricsCollector,
     _json_formatter,
     _redact_sensitive,
+    _serialize_record,
     generate_span_id,
     generate_trace_id,
     request_id_var,
@@ -127,13 +128,13 @@ class TestJsonFormatter:
 
     def test_returns_json_string(self):
         record = self._make_record()
-        result = _json_formatter(record)
+        result = _serialize_record(record)
         parsed = json.loads(result)
         assert parsed["message"] == "Test log"
 
     def test_includes_trace_fields(self):
         record = self._make_record()
-        result = _json_formatter(record)
+        result = _serialize_record(record)
         parsed = json.loads(result)
         assert "trace_id" in parsed
         assert "span_id" in parsed
@@ -143,7 +144,7 @@ class TestJsonFormatter:
 
     def test_includes_level_and_module(self):
         record = self._make_record(level="ERROR", module="api")
-        result = _json_formatter(record)
+        result = _serialize_record(record)
         parsed = json.loads(result)
         assert parsed["level"] == "ERROR"
         assert parsed["module"] == "api"
@@ -151,16 +152,36 @@ class TestJsonFormatter:
     def test_exception_included_when_present(self):
         record = self._make_record()
         record["exception"] = "ValueError: bad value"
-        result = _json_formatter(record)
+        result = _serialize_record(record)
         parsed = json.loads(result)
         assert "exception" in parsed
 
     def test_extra_fields_truncated(self):
         record = self._make_record()
         record["extra"] = {"long_field": "x" * 1000}
-        result = _json_formatter(record)
+        result = _serialize_record(record)
         parsed = json.loads(result)
         assert len(parsed["extra"]["long_field"]) <= 500
+
+    def test_formatter_returns_template_not_json(self):
+        # Loguru format_map()s a callable format's return value — raw JSON here
+        # would make every '{' a field reference (the '"timestamp"' KeyError bug).
+        record = self._make_record()
+        result = _json_formatter(record)
+        assert result == "{extra[_serialized]}\n"
+
+    def test_formatter_stashes_serialized_json_in_extra(self):
+        record = self._make_record()
+        _json_formatter(record)
+        parsed = json.loads(record["extra"]["_serialized"])
+        assert parsed["message"] == "Test log"
+
+    def test_serialized_excludes_stash_key_from_extra(self):
+        record = self._make_record()
+        record["extra"] = {"user_extra": "keep-me"}
+        _json_formatter(record)
+        parsed = json.loads(record["extra"]["_serialized"])
+        assert parsed["extra"] == {"user_extra": "keep-me"}
 
     def test_ends_with_newline(self):
         record = self._make_record()

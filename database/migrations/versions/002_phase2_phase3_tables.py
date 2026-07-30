@@ -11,13 +11,39 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision = "002_phase2_phase3"
-down_revision = None  # Chain to 001_initial if exists
+down_revision = "001_initial"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
+    # 001_initial.sql has grown to include some of these tables (e.g. flashcards,
+    # in a different shape that the app actually uses) — skip anything that
+    # already exists so this migration works on fresh databases.
+    inspector = sa.inspect(op.get_bind())
+    existing = set(inspector.get_table_names())
+
+    def guard(table_name: str) -> bool:
+        return table_name not in existing
+
     # ── Research Sessions ────────────────────────────────
+    if guard("research_sessions"):
+        _create_research_sessions()
+    if guard("research_turns"):
+        _create_research_turns()
+    if guard("export_jobs"):
+        _create_export_jobs()
+    if guard("studio_jobs"):
+        _create_studio_jobs()
+    if guard("collab_presence"):
+        _create_collab_presence()
+    if guard("flashcards"):
+        _create_flashcards()
+    if guard("media_artifacts"):
+        _create_media_artifacts()
+
+
+def _create_research_sessions() -> None:
     op.create_table(
         "research_sessions",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -33,7 +59,8 @@ def upgrade() -> None:
     op.create_index("idx_research_sessions_notebook", "research_sessions", ["notebook_id"])
     op.create_index("idx_research_sessions_user", "research_sessions", ["user_id"])
 
-    # ── Research Turns ───────────────────────────────────
+
+def _create_research_turns() -> None:
     op.create_table(
         "research_turns",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -50,7 +77,8 @@ def upgrade() -> None:
     )
     op.create_index("idx_research_turns_session", "research_turns", ["session_id", "turn_number"])
 
-    # ── Export Jobs ───────────────────────────────────────
+
+def _create_export_jobs() -> None:
     op.create_table(
         "export_jobs",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -66,7 +94,8 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
 
-    # ── Studio Queue Jobs ────────────────────────────────
+
+def _create_studio_jobs() -> None:
     op.create_table(
         "studio_jobs",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -89,7 +118,8 @@ def upgrade() -> None:
     op.create_index("idx_studio_jobs_notebook", "studio_jobs", ["notebook_id"])
     op.create_index("idx_studio_jobs_status", "studio_jobs", ["status"])
 
-    # ── Collaboration Presence ───────────────────────────
+
+def _create_collab_presence() -> None:
     op.create_table(
         "collab_presence",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -103,7 +133,8 @@ def upgrade() -> None:
     )
     op.create_index("idx_collab_presence_notebook", "collab_presence", ["notebook_id"])
 
-    # ── Flashcards (FSRS) ────────────────────────────────
+
+def _create_flashcards() -> None:
     op.create_table(
         "flashcards",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -123,7 +154,8 @@ def upgrade() -> None:
     op.create_index("idx_flashcards_due", "flashcards", ["user_id", "due_at"])
     op.create_index("idx_flashcards_notebook", "flashcards", ["notebook_id"])
 
-    # ── Video/Slide Artifacts Metadata ───────────────────
+
+def _create_media_artifacts() -> None:
     op.create_table(
         "media_artifacts",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),

@@ -94,14 +94,15 @@ async def list_notebooks(
     limit: int = Query(50, le=100),
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """List notebooks for the current user."""
+    """List notebooks for the current user (with live source counts)."""
     from src.infra.nexus_data_persist import notebooks_repo
 
-    return await notebooks_repo.list_all(
+    return await notebooks_repo.list_with_counts(
         auth.tenant_id,
+        user_id=auth.user_id,
+        archived=archived,
         limit=limit,
         offset=offset,
-        filters={"user_id": auth.user_id, "archived": archived},
     )
 
 

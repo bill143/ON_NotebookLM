@@ -18,16 +18,48 @@ depends_on: Union[str, Sequence[str], None] = None
 SQL_FILE = Path(__file__).parent.parent.parent / "schema" / "001_initial.sql"
 
 
+def _split_statements(sql: str) -> list[str]:
+    """Split SQL into statements: drop full-line comments, then split on
+    semicolons outside $$-quoted bodies.
+
+    The previous "split on ';' and skip fragments starting with '--'" approach
+    silently dropped every statement that followed a comment banner (which is
+    nearly all of them) and broke plpgsql functions — fresh databases ended up
+    with no tables at all.
+    """
+    lines = [ln for ln in sql.splitlines() if not ln.lstrip().startswith("--")]
+    cleaned = "\n".join(lines)
+
+    statements: list[str] = []
+    buf: list[str] = []
+    in_dollar = False
+    i = 0
+    while i < len(cleaned):
+        if cleaned.startswith("$$", i):
+            in_dollar = not in_dollar
+            buf.append("$$")
+            i += 2
+            continue
+        ch = cleaned[i]
+        if ch == ";" and not in_dollar:
+            stmt = "".join(buf).strip()
+            if stmt:
+                statements.append(stmt)
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 def upgrade() -> None:
     """Apply the full initial schema from 001_initial.sql."""
     sql_content = SQL_FILE.read_text(encoding="utf-8")
-
-    # Split on semicolons and execute each statement
-    # (Alembic's op.execute handles single statements better)
-    statements = [s.strip() for s in sql_content.split(";") if s.strip()]
-    for stmt in statements:
-        if stmt and not stmt.startswith("--"):
-            op.execute(stmt + ";")
+    for stmt in _split_statements(sql_content):
+        op.execute(stmt + ";")
 
 
 def downgrade() -> None:

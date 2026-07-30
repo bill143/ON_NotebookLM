@@ -66,9 +66,14 @@ celery_app.conf.update(
 # ── Lifecycle Hooks ──────────────────────────────────────────
 
 
-@signals.worker_init.connect
+@signals.worker_process_init.connect
 def on_worker_init(**kwargs: Any) -> None:
-    """Initialize database and logging when worker starts."""
+    """Initialize database and logging in each worker process.
+
+    Must be worker_process_init (per prefork child), not worker_init (parent):
+    an engine created pre-fork is inherited by every child, and asyncio loops
+    and asyncpg connections do not survive fork.
+    """
     from src.infra.nexus_obs_tracing import setup_logging
 
     setup_logging(settings.log_level.value, settings.log_format)
@@ -97,13 +102,18 @@ def on_worker_shutdown(**kwargs: Any) -> None:
 
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:
-    """Run an async function from a sync Celery task."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    """Run an async function from a sync Celery task.
 
-    if loop is None or loop.is_closed():
+    Reuses one event loop per worker process. Creating a fresh loop per task
+    (the previous behavior) left the global engine's pooled asyncpg connections
+    bound to dead loops — every task after the first raised "got Future
+    attached to a different loop" during connection reuse/termination.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("loop closed")
+    except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)

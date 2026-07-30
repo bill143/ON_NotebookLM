@@ -11,13 +11,33 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision = "005_batch2_routers"
-down_revision = "004_hnsw_index_migration"
+down_revision = "004_hnsw_index"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
-    # ── Backups (admin router) ──────────────────────────────
+    # 001_initial.sql also creates some of these (e.g. audit_logs,
+    # prompt_versions) — skip tables that already exist so the chain
+    # works on fresh databases.
+    inspector = sa.inspect(op.get_bind())
+    existing = set(inspector.get_table_names())
+
+    if "backups" not in existing:
+        _create_backups()
+    if "audit_logs" not in existing:
+        _create_audit_logs()
+    if "plugin_registry" not in existing:
+        _create_plugin_registry()
+    if "sync_queue" not in existing:
+        _create_sync_queue()
+    if "prompt_versions" not in existing:
+        _create_prompt_versions()
+    if "prompt_test_cases" not in existing:
+        _create_prompt_test_cases()
+
+
+def _create_backups() -> None:
     op.create_table(
         "backups",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -30,7 +50,8 @@ def upgrade() -> None:
         sa.Column("created_by", UUID(as_uuid=True), nullable=True),
     )
 
-    # ── Audit Logs (admin router) ───────────────────────────
+
+def _create_audit_logs() -> None:
     op.create_table(
         "audit_logs",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -48,7 +69,8 @@ def upgrade() -> None:
     op.create_index("idx_audit_logs_event_type", "audit_logs", ["event_type"])
     op.create_index("idx_audit_logs_created", "audit_logs", ["created_at"])
 
-    # ── Plugin Registry (plugins router) ────────────────────
+
+def _create_plugin_registry() -> None:
     op.create_table(
         "plugin_registry",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -66,7 +88,8 @@ def upgrade() -> None:
     )
     op.create_index("idx_plugin_registry_name", "plugin_registry", ["tenant_id", "name"], unique=True)
 
-    # ── Sync Queue (local router) ───────────────────────────
+
+def _create_sync_queue() -> None:
     op.create_table(
         "sync_queue",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -82,7 +105,8 @@ def upgrade() -> None:
     )
     op.create_index("idx_sync_queue_tenant_status", "sync_queue", ["tenant_id", "status"])
 
-    # ── Prompt Versions (prompts router) ────────────────────
+
+def _create_prompt_versions() -> None:
     op.create_table(
         "prompt_versions",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -107,7 +131,8 @@ def upgrade() -> None:
     op.create_index("idx_prompt_versions_ns_name", "prompt_versions", ["namespace", "name"])
     op.create_index("idx_prompt_versions_status", "prompt_versions", ["status"])
 
-    # ── Prompt Test Cases ───────────────────────────────────
+
+def _create_prompt_test_cases() -> None:
     op.create_table(
         "prompt_test_cases",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),

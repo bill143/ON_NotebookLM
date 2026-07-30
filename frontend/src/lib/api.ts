@@ -311,6 +311,14 @@ class NexusClient {
     return this.request("GET", "/api/v1/models");
   }
 
+  async storeCredential(provider: string, apiKey: string): Promise<{ id: string; provider: string; key_prefix: string }> {
+    return this.request("POST", "/api/v1/models/credentials", {
+      provider,
+      credential_name: `${provider}-default`,
+      api_key: apiKey,
+    });
+  }
+
   async getUsageSummary(days?: number): Promise<UsageSummary> {
     const qs = days ? `?days=${days}` : "";
     return this.request("GET", `/api/v1/models/usage/summary${qs}`);

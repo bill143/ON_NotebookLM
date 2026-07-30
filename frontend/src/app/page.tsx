@@ -236,7 +236,10 @@ function Sidebar() {
 
       {/* Footer */}
       <div className="p-3 border-t border-border">
-        <button className="sidebar-item w-full">
+        <button
+          onClick={() => useAppStore.getState().setActiveTab("settings")}
+          className="sidebar-item w-full"
+        >
           <Settings className="w-4 h-4" />
           <span>Settings</span>
         </button>
@@ -934,7 +937,9 @@ export default function Home() {
       <Sidebar />
 
       <main className="flex-1 flex flex-col overflow-hidden">
-        {activeNotebook ? (
+        {activeTab === "settings" ? (
+          <SettingsPanel />
+        ) : activeNotebook ? (
           <>
             {/* Notebook Header */}
             <div className="px-6 py-4 border-b border-border bg-card/30 flex items-center justify-between">
@@ -964,7 +969,6 @@ export default function Home() {
             {activeTab === "notes" && <NotesPanel />}
             {activeTab === "brain" && <BrainPanel />}
             {activeTab === "vault" && <VaultPage />}
-            {activeTab === "settings" && <SettingsPanel />}
           </>
         ) : (
           <EmptyState />

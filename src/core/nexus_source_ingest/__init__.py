@@ -87,11 +87,20 @@ class ContentExtractor:
             raise SourceProcessingError(f"URL extraction failed: {e}", original_error=e) from e
 
     @traced("source.extract.text")
-    async def extract_text(self, content: str) -> str:
-        """Pass-through for pasted text."""
-        if not content.strip():
+    async def extract_text(self, content: str | None, file_path: str = "") -> str:
+        """Pasted text pass-through; uploaded text-like files are read from storage."""
+        if not (content or "").strip() and file_path:
+            from pathlib import Path
+
+            try:
+                content = Path(file_path).read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                raise SourceProcessingError(
+                    f"Could not read uploaded file: {e}", original_error=e
+                ) from e
+        if not (content or "").strip():
             raise EmptyContentError("Empty text content provided")
-        return content
+        return cast(str, content)
 
     @traced("source.extract.youtube")
     async def extract_youtube(self, url: str) -> str:
@@ -156,9 +165,18 @@ class ContentExtractor:
             "audio": lambda: self.extract_audio(
                 kwargs.get("file_path", ""), kwargs.get("url", "")
             ),
-            "text": lambda: self.extract_text(kwargs.get("content", "")),
-            "pasted_text": lambda: self.extract_text(kwargs.get("content", "")),
-            "markdown": lambda: self.extract_text(kwargs.get("content", "")),
+            "text": lambda: self.extract_text(
+                kwargs.get("content"), kwargs.get("file_path", "")
+            ),
+            "pasted_text": lambda: self.extract_text(
+                kwargs.get("content"), kwargs.get("file_path", "")
+            ),
+            "markdown": lambda: self.extract_text(
+                kwargs.get("content"), kwargs.get("file_path", "")
+            ),
+            "csv": lambda: self.extract_text(
+                kwargs.get("content"), kwargs.get("file_path", "")
+            ),
         }
 
         extractor = extractors.get(source_type)
@@ -216,9 +234,9 @@ class SourceProcessor:
             # 2. Extract content
             content = await self.extractor.extract(
                 source["source_type"],
-                file_path=source.get("asset_file_path", ""),
-                url=source.get("asset_url", ""),
-                content=source.get("full_text", ""),
+                file_path=source.get("asset_file_path") or "",
+                url=source.get("asset_url") or "",
+                content=source.get("full_text") or "",
             )
 
             # 3. Calculate metadata
