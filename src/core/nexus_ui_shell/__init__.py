@@ -276,12 +276,16 @@ def get_shell_config() -> dict[str, Any]:
 
 
 class UIShell:
-<<<<<<< HEAD
     """Facade for UI shell utilities: shortcuts, commands, toasts, and themes."""
 
     @staticmethod
     def config() -> dict[str, Any]:
         """Return complete shell configuration."""
+        return get_shell_config()
+
+    @staticmethod
+    def get_config() -> dict[str, Any]:
+        """Alias for config() — compatibility shim."""
         return get_shell_config()
 
     @staticmethod
@@ -299,10 +303,3 @@ class UIShell:
     @staticmethod
     def toast_info(title: str, description: str = "") -> ToastPayload:
         return Toast.info(title, description)
-=======
-    """Compatibility facade for callers expecting a UIShell class."""
-
-    @staticmethod
-    def get_config() -> dict[str, Any]:
-        return get_shell_config()
->>>>>>> origin/main

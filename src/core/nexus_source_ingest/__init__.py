@@ -105,24 +105,7 @@ class ContentExtractor:
         try:
             import asyncio
 
-<<<<<<< HEAD
             import yt_dlp
-=======
-            # Extract video ID from URL
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
-            video_id = ""
-            if (
-                hostname == "youtube.com"
-                or hostname.endswith(".youtube.com")
-                or hostname == "www.youtube.com"
-            ):
-                from urllib.parse import parse_qs
-
-                video_id = parse_qs(parsed.query).get("v", [""])[0]
-            elif hostname == "youtu.be" or hostname.endswith(".youtu.be"):
-                video_id = parsed.path.strip("/")
->>>>>>> origin/main
 
             ydl_opts: dict[str, Any] = {
                 "skip_download": True,
@@ -132,14 +115,7 @@ class ContentExtractor:
                 "no_warnings": True,
             }
 
-<<<<<<< HEAD
             loop = asyncio.get_event_loop()
-=======
-            # youtube-transcript-api exposes get_transcript on the class; stubs omit it.
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)  # type: ignore[attr-defined]
-            transcript = " ".join(entry["text"] for entry in transcript_list)
-            return transcript
->>>>>>> origin/main
 
             def _fetch_info() -> dict[str, Any]:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
