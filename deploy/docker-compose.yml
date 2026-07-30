@@ -56,6 +56,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Override the image's baked-in HEALTHCHECK (curl :8000) — the worker runs
+    # no web server; probe celery itself instead.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.worker inspect ping --timeout 5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
     volumes:
       - nexus-storage:/app/storage
@@ -82,6 +90,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # The image's HEALTHCHECK probes :8000; beat has no server — disable it.
+    healthcheck:
+      disable: true
     restart: unless-stopped
     deploy:
       resources:
@@ -262,7 +273,8 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      # Host port 3100 — 3000 is occupied by another local app (NexusMind).
+      - "3100:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://nexus-api:8000
       - NEXT_PUBLIC_WS_URL=ws://nexus-api:8000
