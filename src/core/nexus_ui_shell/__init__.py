@@ -276,33 +276,8 @@ def get_shell_config() -> dict[str, Any]:
 
 
 class UIShell:
-<<<<<<< HEAD
-    """Facade for UI shell utilities: shortcuts, commands, toasts, and themes."""
-
-    @staticmethod
-    def config() -> dict[str, Any]:
-        """Return complete shell configuration."""
-        return get_shell_config()
-
-    @staticmethod
-    def toast_success(title: str, description: str = "") -> ToastPayload:
-        return Toast.success(title, description)
-
-    @staticmethod
-    def toast_error(title: str, description: str = "") -> ToastPayload:
-        return Toast.error(title, description)
-
-    @staticmethod
-    def toast_warning(title: str, description: str = "") -> ToastPayload:
-        return Toast.warning(title, description)
-
-    @staticmethod
-    def toast_info(title: str, description: str = "") -> ToastPayload:
-        return Toast.info(title, description)
-=======
     """Compatibility facade for callers expecting a UIShell class."""
 
     @staticmethod
     def get_config() -> dict[str, Any]:
         return get_shell_config()
->>>>>>> origin/main

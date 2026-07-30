@@ -11,18 +11,10 @@ Provides:
 
 from __future__ import annotations
 
-<<<<<<< HEAD
-import json
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Optional
-=======
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
->>>>>>> origin/main
 
 from loguru import logger
 
@@ -52,10 +44,7 @@ class ConflictStrategy(str, Enum):
 @dataclass
 class LocalModelInfo:
     """Information about a locally available model."""
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/main
     name: str
     provider: str
     model_type: str
@@ -75,13 +64,9 @@ class LocalModelManager:
         # Check Ollama
         try:
             import httpx
-<<<<<<< HEAD
-            from src.config import get_settings
-=======
 
             from src.config import get_settings
 
->>>>>>> origin/main
             settings = get_settings()
 
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -89,16 +74,6 @@ class LocalModelManager:
                 if response.status_code == 200:
                     data = response.json()
                     for model in data.get("models", []):
-<<<<<<< HEAD
-                        models.append(LocalModelInfo(
-                            name=model["name"],
-                            provider="ollama",
-                            model_type="chat",
-                            base_url=f"{settings.ollama_base_url}/v1",
-                            is_available=True,
-                            model_size_gb=model.get("size", 0) / (1024**3),
-                        ))
-=======
                         models.append(
                             LocalModelInfo(
                                 name=model["name"],
@@ -109,34 +84,20 @@ class LocalModelManager:
                                 model_size_gb=model.get("size", 0) / (1024**3),
                             )
                         )
->>>>>>> origin/main
         except Exception:
             logger.debug("Ollama not available")
 
         # Check Kokoro TTS
         try:
             import httpx
-<<<<<<< HEAD
-            from src.config import get_settings
-=======
 
             from src.config import get_settings
 
->>>>>>> origin/main
             settings = get_settings()
 
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{settings.kokoro_tts_base_url}/v1/models")
                 if response.status_code == 200:
-<<<<<<< HEAD
-                    models.append(LocalModelInfo(
-                        name="kokoro-tts",
-                        provider="kokoro",
-                        model_type="tts",
-                        base_url=settings.kokoro_tts_base_url,
-                        is_available=True,
-                    ))
-=======
                     models.append(
                         LocalModelInfo(
                             name="kokoro-tts",
@@ -146,18 +107,13 @@ class LocalModelManager:
                             is_available=True,
                         )
                     )
->>>>>>> origin/main
         except Exception:
             logger.debug("Kokoro TTS not available")
 
         logger.info(f"Detected {len(models)} local models")
         return models
 
-<<<<<<< HEAD
-    async def auto_register_local_models(self, tenant_id: Optional[str] = None) -> int:
-=======
     async def auto_register_local_models(self, tenant_id: str | None = None) -> int:
->>>>>>> origin/main
         """Auto-register detected local models in the DB."""
         from src.infra.nexus_data_persist import BaseRepository
 
@@ -183,15 +139,11 @@ class LocalModelManager:
                     )
                     registered += 1
                 except Exception:
-<<<<<<< HEAD
-                    pass  # Model may already be registered
-=======
                     logger.debug(
                         "Skipping local model registration (may already exist)",
                         model=model.name,
                         exc_info=True,
                     )
->>>>>>> origin/main
 
         logger.info(f"Auto-registered {registered} local models")
         return registered
@@ -217,17 +169,6 @@ class SyncQueue:
         from src.infra.nexus_data_persist import BaseRepository
 
         repo = BaseRepository("sync_queue")
-<<<<<<< HEAD
-        result = await repo.create(data={
-            "tenant_id": tenant_id,
-            "device_id": device_id,
-            "operation": operation.value,
-            "table_name": table_name,
-            "record_id": record_id,
-            "payload": payload,
-            "status": SyncStatus.PENDING.value,
-        })
-=======
         result = await repo.create(
             data={
                 "tenant_id": tenant_id,
@@ -239,7 +180,6 @@ class SyncQueue:
                 "status": SyncStatus.PENDING.value,
             }
         )
->>>>>>> origin/main
         return result["id"]
 
     @traced("sync.process_queue")
@@ -250,16 +190,10 @@ class SyncQueue:
         conflict_strategy: ConflictStrategy = ConflictStrategy.LOCAL_WINS,
     ) -> dict[str, int]:
         """Process pending sync items."""
-<<<<<<< HEAD
-        from src.infra.nexus_data_persist import get_session
-        from sqlalchemy import text
-
-=======
         from sqlalchemy import text
 
         from src.infra.nexus_data_persist import get_session
 
->>>>>>> origin/main
         async with get_session(tenant_id) as session:
             result = await session.execute(
                 text("""
@@ -293,12 +227,7 @@ class SyncQueue:
         strategy: ConflictStrategy,
     ) -> None:
         """Sync a single queue item to the cloud database."""
-<<<<<<< HEAD
-        from src.infra.nexus_data_persist import BaseRepository, get_session
-        from sqlalchemy import text
-=======
         from src.infra.nexus_data_persist import BaseRepository
->>>>>>> origin/main
 
         repo = BaseRepository(item["table_name"])
 
@@ -311,12 +240,6 @@ class SyncQueue:
 
         # Mark as synced
         sync_repo = BaseRepository("sync_queue")
-<<<<<<< HEAD
-        await sync_repo.update(item["id"], {
-            "status": SyncStatus.SYNCED.value,
-            "synced_at": datetime.now(timezone.utc),
-        })
-=======
         await sync_repo.update(
             item["id"],
             {
@@ -324,7 +247,6 @@ class SyncQueue:
                 "synced_at": datetime.now(UTC),
             },
         )
->>>>>>> origin/main
 
     def get_feature_matrix(self, is_online: bool) -> dict[str, bool]:
         """Feature availability matrix for online vs offline mode."""
@@ -343,8 +265,6 @@ class SyncQueue:
             "real_time_collab": is_online,
         }
 
-<<<<<<< HEAD
-=======
     async def list_models(self) -> list[dict[str, Any]]:
         """List local models in router-friendly format."""
         detected = await self.detect_local_models()
@@ -557,7 +477,6 @@ def get_feature_matrix() -> list[dict[str, Any]]:
     ]
     return features
 
->>>>>>> origin/main
 
 # Global singletons
 local_model_manager = LocalModelManager()

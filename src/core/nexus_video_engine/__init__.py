@@ -289,9 +289,6 @@ document.addEventListener('keydown', e => {{ if(e.key==='ArrowRight')next(); if(
         h = hex_color.lstrip("#")
         return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
-    # Public alias so callers and tests can discover the HTML slideshow fallback
-    generate_html_slideshow = _compose_html_slideshow
-
 
 # Global singleton
 video_engine = VideoEngine()
