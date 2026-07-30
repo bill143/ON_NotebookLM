@@ -21,6 +21,23 @@ from src.infra.nexus_vault_keys import AuthContext, get_current_user
 router = APIRouter(prefix="/sources", tags=["Sources"])
 
 MAX_FILE_SIZE_MB = 100
+MAX_MEDIA_FILE_SIZE_MB = 1024  # meeting recordings routinely exceed 100MB
+
+MEDIA_MIME_TO_TYPE = {
+    "audio/mpeg": "audio",
+    "audio/wav": "audio",
+    "audio/x-wav": "audio",
+    "audio/mp4": "audio",
+    "audio/x-m4a": "audio",
+    "audio/ogg": "audio",
+    "audio/flac": "audio",
+    "video/mp4": "video",
+    "video/quicktime": "video",
+    "video/x-matroska": "video",
+    "video/webm": "video",
+    "video/x-msvideo": "video",
+}
+
 SUPPORTED_MIME_TYPES = {
     "application/pdf",
     "text/plain",
@@ -29,12 +46,10 @@ SUPPORTED_MIME_TYPES = {
     "text/html",
     "application/json",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "audio/mpeg",
-    "audio/wav",
-    "audio/mp4",
     "image/png",
     "image/jpeg",
     "image/webp",
+    *MEDIA_MIME_TO_TYPE,
 }
 
 
@@ -99,19 +114,28 @@ async def upload_source(
     if file.content_type and file.content_type not in SUPPORTED_MIME_TYPES:
         raise UnsupportedFormatError(f"Unsupported file type: {file.content_type}")
 
-    content = await file.read()
-    size_mb = len(content) / (1024 * 1024)
-    if size_mb > MAX_FILE_SIZE_MB:
-        raise FileTooLargeError(f"File too large: {size_mb:.1f}MB (max {MAX_FILE_SIZE_MB}MB)")
-
-    # Determine source type from mime
+    # Determine source type from mime (media types get a larger size budget)
     mime_to_type = {
         "application/pdf": "pdf",
         "text/plain": "text",
         "text/markdown": "markdown",
         "text/csv": "csv",
+        **MEDIA_MIME_TO_TYPE,
     }
     source_type = mime_to_type.get(file.content_type or "", "upload")
+    if source_type == "upload" and file.filename:
+        # Fall back to extension for media files with generic/missing mimes
+        from src.core.nexus_media_ingest import kind_for_extension
+
+        media_kind = kind_for_extension(Path(file.filename).suffix)
+        if media_kind:
+            source_type = media_kind
+
+    content = await file.read()
+    size_mb = len(content) / (1024 * 1024)
+    size_limit = MAX_MEDIA_FILE_SIZE_MB if source_type in ("audio", "video") else MAX_FILE_SIZE_MB
+    if size_mb > size_limit:
+        raise FileTooLargeError(f"File too large: {size_mb:.1f}MB (max {size_limit}MB)")
 
     from src.config import get_settings
     from src.infra.nexus_data_persist import sources_repo

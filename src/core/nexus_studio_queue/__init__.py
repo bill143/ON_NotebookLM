@@ -47,6 +47,7 @@ class ArtifactType(str, Enum):
     TIMELINE = "timeline"
     FAQ = "faq"
     BRIEFING = "briefing"
+    MEETING_MINUTES = "meeting_minutes"
     SLIDE_DECK = "slide_deck"
     VIDEO = "video"
     MIND_MAP = "mind_map"
@@ -117,6 +118,11 @@ class GenerationJob:
 
 ARTIFACT_PIPELINES: dict[ArtifactType, list[str]] = {
     ArtifactType.SUMMARY: [
+        "gather_sources",
+        "generate_content",
+        "format_output",
+    ],
+    ArtifactType.MEETING_MINUTES: [
         "gather_sources",
         "generate_content",
         "format_output",

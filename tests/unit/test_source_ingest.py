@@ -188,9 +188,13 @@ class TestSupportedTypes:
             await ext.extract("docx_file", content="data")
 
     @pytest.mark.asyncio
-    async def test_unsupported_type_video(self):
+    async def test_video_now_supported_but_needs_a_source(self):
+        # "video" became a first-class source type (nexus_media_ingest);
+        # without a file_path or url it fails with a processing error.
+        from src.exceptions import SourceProcessingError
+
         ext = ContentExtractor()
-        with pytest.raises(UnsupportedFormatError):
+        with pytest.raises(SourceProcessingError):
             await ext.extract("video", content="data")
 
 

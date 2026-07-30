@@ -236,6 +236,51 @@ Content:
     return {"insights": insights, "model": response.model}
 
 
+@traced("agent.content.generate_meeting_minutes")
+async def generate_meeting_minutes(state: Any) -> dict[str, Any]:
+    """Generate structured meeting minutes from a timestamped transcript."""
+    from src.agents.nexus_model_layer import model_manager
+    from src.infra.nexus_prompt_registry import prompt_registry
+
+    source_content = state.inputs.get("source_content", "")
+    tenant_id = state.tenant_id
+
+    prompt = await prompt_registry.resolve(
+        "studio",
+        "meeting_minutes",
+        variables={
+            "source_content": source_content[:120000],
+            "meeting_title": state.inputs.get("meeting_title", ""),
+            "meeting_date": state.inputs.get("meeting_date", ""),
+            "attendees_hint": state.inputs.get("attendees_hint", ""),
+            "focus": state.inputs.get("focus", ""),
+        },
+    )
+
+    llm = await model_manager.provision_llm(task_type="transformation", tenant_id=tenant_id)
+    response = await llm.generate(
+        [{"role": "system", "content": str(prompt)}],
+        temperature=0.2,
+    )
+
+    await cost_tracker.record_usage(
+        UsageRecord(
+            tenant_id=tenant_id,
+            user_id=state.user_id,
+            model_name=response.model,
+            provider=response.provider,
+            feature_id="1A",
+            agent_id="content_generator",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cost_usd=response.cost_usd,
+            latency_ms=response.latency_ms,
+        )
+    )
+
+    return {"meeting_minutes": response.content, "model": response.model}
+
+
 class ContentAgent:
     """Studio queue entrypoint: maps artifact_type → content generators."""
 
@@ -265,6 +310,8 @@ class ContentAgent:
             return await generate_insights(state)
         if artifact_type == "flashcard":
             return await generate_flashcards(state)
+        if artifact_type == "meeting_minutes":
+            return await generate_meeting_minutes(state)
         return await generate_summary(state)
 
 

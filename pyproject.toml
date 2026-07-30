@@ -25,6 +25,8 @@ dependencies = [
     "jinja2>=3.1.0",
     "pydub>=0.25.0",
     "pypdf>=4.0.0",
+    "yt-dlp>=2025.1.1",
+    "pip-system-certs>=4.0; sys_platform == 'win32'",
     "beautifulsoup4>=4.12.0",
     "tiktoken>=0.7.0",
     "tenacity>=8.3.0",
@@ -79,6 +81,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Vendored media pipeline (claude-video, MIT) — kept close to upstream for easy diffing.
+"src/core/nexus_media_ingest/pipeline/*.py" = ["E", "F", "W", "I", "N", "UP", "S", "B", "A", "C4", "PT"]
 # FastAPI Depends()/File() in route defaults are framework idioms, not mutable-default bugs.
 "src/api/*.py" = ["B008"]
 # Public exception names are API-stable (renaming would break importers).

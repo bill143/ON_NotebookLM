@@ -126,12 +126,36 @@ class ContentExtractor:
         except Exception as e:
             raise SourceProcessingError(f"YouTube extraction failed: {e}", original_error=e) from e
 
+    @traced("source.extract.video")
+    async def extract_video(self, file_path: str = "", url: str = "") -> str:
+        """Extract a timestamped transcript (+ keyframes to storage) from a
+        video file or any yt-dlp-supported URL. Captions first, Whisper fallback."""
+        from src.core.nexus_media_ingest import media_extractor
+
+        result = await media_extractor.extract(kind="video", file_path=file_path, url=url)
+        return result.transcript
+
+    @traced("source.extract.audio")
+    async def extract_audio(self, file_path: str = "", url: str = "") -> str:
+        """Extract a timestamped transcript from an audio file (mp3/wav/m4a/…)
+        or audio URL via captions/Whisper."""
+        from src.core.nexus_media_ingest import media_extractor
+
+        result = await media_extractor.extract(kind="audio", file_path=file_path, url=url)
+        return result.transcript
+
     async def extract(self, source_type: str, **kwargs: Any) -> str:
         """Route to the appropriate extractor."""
         extractors = {
             "pdf": lambda: self.extract_pdf(kwargs.get("file_path", "")),
             "url": lambda: self.extract_url(kwargs.get("url", "")),
             "youtube": lambda: self.extract_youtube(kwargs.get("url", "")),
+            "video": lambda: self.extract_video(
+                kwargs.get("file_path", ""), kwargs.get("url", "")
+            ),
+            "audio": lambda: self.extract_audio(
+                kwargs.get("file_path", ""), kwargs.get("url", "")
+            ),
             "text": lambda: self.extract_text(kwargs.get("content", "")),
             "pasted_text": lambda: self.extract_text(kwargs.get("content", "")),
             "markdown": lambda: self.extract_text(kwargs.get("content", "")),

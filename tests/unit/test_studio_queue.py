@@ -63,6 +63,7 @@ class TestArtifactType:
             "timeline",
             "faq",
             "briefing",
+            "meeting_minutes",
             "slide_deck",
             "video",
             "mind_map",
@@ -72,7 +73,7 @@ class TestArtifactType:
         assert actual == expected
 
     def test_artifact_type_count(self):
-        assert len(ArtifactType) == 12
+        assert len(ArtifactType) == 13
 
     def test_artifact_type_is_string_enum(self):
         assert isinstance(ArtifactType.PODCAST, str)
