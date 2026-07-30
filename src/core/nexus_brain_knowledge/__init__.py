@@ -1,10 +1,6 @@
 """
 Nexus Brain Knowledge — Feature 5: Persistent Brain & Learning System
 Source: Repo #7 (notes, insights, vector search), ORIGINAL ENGINEERING (FSRS)
-<<<<<<< HEAD
-
-=======
->>>>>>> origin/main
 Provides:
 - Notebook-scoped knowledge base with dual search
 - FSRS-4.5 spaced repetition algorithm
@@ -15,31 +11,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-<<<<<<< HEAD
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
-
-from loguru import logger
-
-from src.infra.nexus_obs_tracing import traced
-
-
-# ── FSRS-4.5 Spaced Repetition Algorithm ────────────────────
-=======
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.infra.nexus_obs_tracing import traced
 
 # ── FSRS-4.5 Spaced Repetition Algorithm ──────────────────────
->>>>>>> origin/main
 # Original engineering — no repo has this
 
 # FSRS-4.5 parameters (optimal defaults from research)
 FSRS_PARAMS = {
-<<<<<<< HEAD
-    "w": [0.4, 0.6, 2.4, 5.8, 4.93, 0.94, 0.86, 0.01, 1.49, 0.14, 0.94, 2.18, 0.05, 0.34, 1.26, 0.29, 2.61],
-=======
     "w": [
         0.4,
         0.6,
@@ -59,7 +40,6 @@ FSRS_PARAMS = {
         0.29,
         2.61,
     ],
->>>>>>> origin/main
     "decay": -0.5,
     "factor": 0.9 ** (1 / -0.5) - 1,
     "request_retention": 0.9,
@@ -69,15 +49,6 @@ FSRS_PARAMS = {
 @dataclass
 class ReviewState:
     """State of a flashcard review schedule."""
-<<<<<<< HEAD
-    difficulty: float     # D ∈ [1, 10]
-    stability: float      # S > 0 (days)
-    retrievability: float # R ∈ [0, 1]
-    state: int            # 0=new, 1=learning, 2=review, 3=relearning
-    review_count: int = 0
-    lapses: int = 0
-    due_at: Optional[datetime] = None
-=======
 
     difficulty: float  # D in [1, 10]
     stability: float  # S > 0 (days)
@@ -86,24 +57,16 @@ class ReviewState:
     review_count: int = 0
     lapses: int = 0
     due_at: datetime | None = None
->>>>>>> origin/main
 
 
 class FSRSScheduler:
     """
     FSRS-4.5 scheduling algorithm implementation.
-<<<<<<< HEAD
-    Calculates optimal review intervals based on memory model.
-    """
-
-    def __init__(self, params: Optional[dict] = None) -> None:
-=======
 
     Calculates optimal review intervals based on memory model.
     """
 
     def __init__(self, params: dict | None = None) -> None:
->>>>>>> origin/main
         self.w = (params or FSRS_PARAMS)["w"]
         self.decay = FSRS_PARAMS["decay"]
         self.factor = FSRS_PARAMS["factor"]
@@ -126,13 +89,6 @@ class FSRSScheduler:
     def next_stability(self, d: float, s: float, r: float, rating: int) -> float:
         """Calculate new stability after a review."""
         if rating == 1:  # again
-<<<<<<< HEAD
-            return max(0.1, self.w[11] * pow(d, -self.w[12]) * (pow(s + 1, self.w[13]) - 1) * math.exp((1 - r) * self.w[14]))
-        else:  # hard, good, easy
-            hard_penalty = self.w[15] if rating == 2 else 1.0
-            easy_bonus = self.w[16] if rating == 4 else 1.0
-            return s * (1 + math.exp(self.w[8]) * (11 - d) * pow(s, -self.w[9]) * (math.exp((1 - r) * self.w[10]) - 1) * hard_penalty * easy_bonus)
-=======
             return max(
                 0.1,
                 self.w[11]
@@ -156,7 +112,6 @@ class FSRSScheduler:
             # same-day reviews where retrievability can be near 1.0.
             min_growth = {2: 1.08, 3: 1.35, 4: 1.7}[rating]
             return s * max(growth, min_growth)
->>>>>>> origin/main
 
     def next_interval(self, s: float) -> float:
         """Calculate next review interval in days from stability."""
@@ -173,23 +128,13 @@ class FSRSScheduler:
         rating: int,  # 1=again, 2=hard, 3=good, 4=easy
     ) -> ReviewState:
         """Schedule the next review based on rating."""
-<<<<<<< HEAD
-        now = datetime.now(timezone.utc)
-=======
         now = datetime.now(UTC)
->>>>>>> origin/main
 
         if current_state.state == 0:  # New card
             difficulty = self.init_difficulty(rating)
             stability = self.init_stability(rating)
             state = 1 if rating < 3 else 2
         else:
-<<<<<<< HEAD
-            # Use the stored retrievability which reflects the card's actual memory
-            # state at review time.  Recomputing from (now - due_at) gives 1.0 when
-            # the card is reviewed on time, which incorrectly zeroes the stability gain.
-            r = current_state.retrievability
-=======
             # Use the scheduled interval as the baseline elapsed time.
             # This ensures that when a card is reviewed exactly on time
             # (elapsed ~ 0), the retrievability reflects the target retention
@@ -204,7 +149,6 @@ class FSRSScheduler:
                 elapsed = scheduled_interval
 
             r = self.retrievability(current_state.stability, elapsed)
->>>>>>> origin/main
             difficulty = self.next_difficulty(current_state.difficulty, rating)
             stability = self.next_stability(difficulty, current_state.stability, r, rating)
             state = 3 if rating == 1 else 2
@@ -212,23 +156,10 @@ class FSRSScheduler:
         interval_days = self.next_interval(stability)
         due_at = now + timedelta(days=interval_days)
 
-<<<<<<< HEAD
-        # Store retrievability projected at the next due date (≈ request_retention).
-        # Storing 1.0 ("just reviewed") would cause zero stability gain if a
-        # subsequent review is chained immediately, because r=1.0 zeroes the
-        # FSRS stability-gain formula.
-        projected_r = self.retrievability(stability, interval_days)
-
-        return ReviewState(
-            difficulty=round(difficulty, 4),
-            stability=round(stability, 4),
-            retrievability=round(projected_r, 4),
-=======
         return ReviewState(
             difficulty=round(difficulty, 4),
             stability=round(stability, 4),
             retrievability=1.0,  # Just reviewed
->>>>>>> origin/main
             state=state,
             review_count=current_state.review_count + 1,
             lapses=current_state.lapses + (1 if rating == 1 else 0),
@@ -236,12 +167,8 @@ class FSRSScheduler:
         )
 
 
-<<<<<<< HEAD
-# ── Knowledge Base Service ───────────────────────────────────
-=======
 # ── Knowledge Base Service ─────────────────────────────────────
 
->>>>>>> origin/main
 
 class KnowledgeBase:
     """Notebook-scoped knowledge management."""
@@ -254,20 +181,6 @@ class KnowledgeBase:
         self,
         user_id: str,
         tenant_id: str,
-<<<<<<< HEAD
-        notebook_id: Optional[str] = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Get flashcards due for review."""
-        from src.infra.nexus_data_persist import get_session
-        from sqlalchemy import text
-
-        query = """
-            SELECT f.id, f.front, f.back, f.tags,
-                   rr.difficulty, rr.stability, rr.due_at, rr.review_count, rr.lapses, rr.state
-            FROM flashcards f
-            LEFT JOIN review_records rr ON f.id = rr.flashcard_id AND rr.user_id = :user_id
-=======
         notebook_id: str | None = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
@@ -283,22 +196,13 @@ class KnowledgeBase:
             FROM flashcards f
             LEFT JOIN review_records rr
                 ON f.id = rr.flashcard_id AND rr.user_id = :user_id
->>>>>>> origin/main
             WHERE f.tenant_id = :tenant_id
               AND (rr.due_at IS NULL OR rr.due_at <= NOW())
         """
         params: dict[str, Any] = {"user_id": user_id, "tenant_id": tenant_id}
-<<<<<<< HEAD
-
         if notebook_id:
             query += " AND f.notebook_id = :notebook_id"
             params["notebook_id"] = notebook_id
-
-=======
-        if notebook_id:
-            query += " AND f.notebook_id = :notebook_id"
-            params["notebook_id"] = notebook_id
->>>>>>> origin/main
         query += " ORDER BY rr.due_at ASC NULLS FIRST LIMIT :limit"
         params["limit"] = limit
 
@@ -315,16 +219,10 @@ class KnowledgeBase:
         rating: int,
     ) -> dict[str, Any]:
         """Process a flashcard review and schedule next review."""
-<<<<<<< HEAD
-        from src.infra.nexus_data_persist import get_session
-        from sqlalchemy import text
-
-=======
         from sqlalchemy import text
 
         from src.infra.nexus_data_persist import get_session
 
->>>>>>> origin/main
         # Get current state
         async with get_session(tenant_id) as session:
             result = await session.execute(
@@ -359,17 +257,6 @@ class KnowledgeBase:
             await session.execute(
                 text("""
                     INSERT INTO review_records
-<<<<<<< HEAD
-                    (id, flashcard_id, user_id, difficulty, stability, retrievability, due_at, review_count, lapses, rating, state)
-                    VALUES (uuid_generate_v4(), :fid, :uid, :d, :s, :r, :due, :rc, :l, :rating, :state)
-                """),
-                {
-                    "fid": flashcard_id, "uid": user_id,
-                    "d": next_state.difficulty, "s": next_state.stability,
-                    "r": next_state.retrievability, "due": next_state.due_at,
-                    "rc": next_state.review_count, "l": next_state.lapses,
-                    "rating": rating, "state": next_state.state,
-=======
                         (id, flashcard_id, user_id, difficulty, stability,
                          retrievability, due_at, review_count, lapses, rating, state)
                     VALUES
@@ -387,7 +274,6 @@ class KnowledgeBase:
                     "l": next_state.lapses,
                     "rating": rating,
                     "state": next_state.state,
->>>>>>> origin/main
                 },
             )
 
@@ -395,13 +281,6 @@ class KnowledgeBase:
             "next_due": next_state.due_at.isoformat() if next_state.due_at else None,
             "difficulty": next_state.difficulty,
             "stability": next_state.stability,
-<<<<<<< HEAD
-            "interval_days": (next_state.due_at - datetime.now(timezone.utc)).days if next_state.due_at else 0,
-        }
-
-    # Alias so callers and tests can use either name
-    review_card = review_flashcard
-=======
             "interval_days": (next_state.due_at - datetime.now(UTC)).days
             if next_state.due_at
             else 0,
@@ -730,14 +609,7 @@ class BrainManager:
             "retention_rate": round(learned / total, 2) if total > 0 else 0.0,
             "streak_days": 0,  # Calculated from consecutive review days
         }
->>>>>>> origin/main
 
 
 # Global singleton
 knowledge_base = KnowledgeBase()
-<<<<<<< HEAD
-
-# Alias used by tests and external callers
-KnowledgeBaseService = KnowledgeBase
-=======
->>>>>>> origin/main
