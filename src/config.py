@@ -143,10 +143,17 @@ class Settings(BaseSettings):
         }
     )
 
+    # Development-only: when true (and NOT in production), API requests without
+    # an Authorization header run as a fixed local dev user. The frontend has no
+    # login flow yet — this is the supported local single-user mode.
+    dev_auto_login: bool = False
+
     @model_validator(mode="after")
     def _reject_insecure_defaults_in_production(self) -> Settings:
         if self.environment != Environment.PRODUCTION:
             return self
+        if self.dev_auto_login:
+            raise ValueError("DEV_AUTO_LOGIN must be false in production.")
         violations: list[str] = []
         if self.jwt_secret in self._INSECURE_DEFAULTS:
             violations.append("JWT_SECRET")

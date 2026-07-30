@@ -347,11 +347,24 @@ rate_limiter = RateLimiter()
 # ── FastAPI Dependency ───────────────────────────────────────
 
 
+# Fixed identities for DEV_AUTO_LOGIN (seeded by database/seed_dev_user.sql).
+DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+DEV_USER_ID = "00000000-0000-0000-0000-000000000002"
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> AuthContext:
     """FastAPI dependency for extracting authenticated user."""
     if not authorization:
+        settings = get_settings()
+        if settings.dev_auto_login and not settings.is_production:
+            return AuthContext(
+                user_id=DEV_USER_ID,
+                tenant_id=DEV_TENANT_ID,
+                roles=["owner"],
+                email="dev@localhost",
+            )
         raise AuthError("No authorization header")
 
     # Support both "Bearer <token>" and raw token
