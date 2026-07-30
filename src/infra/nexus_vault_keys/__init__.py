@@ -16,15 +16,38 @@ import base64
 import hashlib
 import os
 import time
+<<<<<<< HEAD
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+=======
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import Header
+>>>>>>> origin/main
 from loguru import logger
 
 from src.config import get_settings
 from src.exceptions import AuthError, ForbiddenError, RateLimitError, TenantIsolationError
 
+<<<<<<< HEAD
+
+# ── Credential Encryption (AES-256-GCM) ─────────────────────
+
+def _get_encryption_key() -> bytes:
+    """Derive a 32-byte key from the configured encryption key."""
+    settings = get_settings()
+    key = settings.encryption_key.encode()
+    return hashlib.sha256(key).digest()
+
+
+def encrypt_credential(plaintext: str) -> str:
+    """Encrypt an API key or secret for storage."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = _get_encryption_key()
+=======
 # ── Credential Encryption (AES-256-GCM + Argon2id KDF) ──────
 
 _ARGON2_TIME_COST = 3
@@ -69,10 +92,23 @@ def encrypt_credential(plaintext: str, *, salt: bytes | None = None) -> tuple[st
         salt = os.urandom(_ARGON2_SALT_LEN)
 
     key = _derive_key_argon2(settings.encryption_key.encode(), salt)
+>>>>>>> origin/main
     nonce = os.urandom(12)
     aesgcm = AESGCM(key)
     ciphertext = aesgcm.encrypt(nonce, plaintext.encode(), None)
 
+<<<<<<< HEAD
+    # Store as base64: nonce + ciphertext
+    combined = nonce + ciphertext
+    return base64.b64encode(combined).decode()
+
+
+def decrypt_credential(encrypted: str) -> str:
+    """Decrypt a stored API key or secret."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = _get_encryption_key()
+=======
     combined = nonce + ciphertext
     return base64.b64encode(combined).decode(), salt
 
@@ -94,23 +130,36 @@ def decrypt_credential(encrypted: str, *, salt: bytes | None = None) -> str:
     else:
         key = _get_encryption_key_legacy()
 
+>>>>>>> origin/main
     combined = base64.b64decode(encrypted)
     nonce = combined[:12]
     ciphertext = combined[12:]
 
     aesgcm = AESGCM(key)
+<<<<<<< HEAD
+    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+    return plaintext.decode()
+=======
     return aesgcm.decrypt(nonce, ciphertext, None).decode()
+>>>>>>> origin/main
 
 
 # ── JWT Token Management ─────────────────────────────────────
 
+<<<<<<< HEAD
+=======
 
+>>>>>>> origin/main
 def create_access_token(
     user_id: str,
     tenant_id: str,
     roles: list[str],
     *,
+<<<<<<< HEAD
+    expires_minutes: Optional[int] = None,
+=======
     expires_minutes: int | None = None,
+>>>>>>> origin/main
 ) -> str:
     """Create a JWT access token."""
     from jose import jwt
@@ -122,8 +171,13 @@ def create_access_token(
         "sub": user_id,
         "tid": tenant_id,
         "roles": roles,
+<<<<<<< HEAD
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=expires),
+=======
         "iat": datetime.now(UTC),
         "exp": datetime.now(UTC) + timedelta(minutes=expires),
+>>>>>>> origin/main
         "iss": "nexus-notebook-11",
     }
 
@@ -145,12 +199,19 @@ def verify_token(token: str) -> dict[str, Any]:
         )
         return payload
     except JWTError as e:
+<<<<<<< HEAD
+        raise AuthError(f"Invalid token: {e}")
+=======
         raise AuthError(f"Invalid token: {e}") from e
+>>>>>>> origin/main
 
 
 # ── Auth Context ─────────────────────────────────────────────
 
+<<<<<<< HEAD
+=======
 
+>>>>>>> origin/main
 class AuthContext:
     """Authenticated user context extracted from a verified token."""
 
@@ -159,7 +220,11 @@ class AuthContext:
         user_id: str,
         tenant_id: str,
         roles: list[str],
+<<<<<<< HEAD
+        email: Optional[str] = None,
+=======
         email: str | None = None,
+>>>>>>> origin/main
     ) -> None:
         self.user_id = user_id
         self.tenant_id = tenant_id
@@ -199,7 +264,10 @@ class AuthContext:
 
 # ── CSRF Protection ──────────────────────────────────────────
 
+<<<<<<< HEAD
+=======
 
+>>>>>>> origin/main
 def generate_csrf_token(session_id: str) -> str:
     """Generate a CSRF token tied to a session."""
     settings = get_settings()
@@ -213,6 +281,18 @@ def verify_csrf_token(token: str, session_id: str) -> bool:
     return token == expected
 
 
+<<<<<<< HEAD
+# ── Rate Limiter ─────────────────────────────────────────────
+
+class RateLimiter:
+    """
+    In-memory rate limiter with sliding window.
+    For production: replace with Redis-backed implementation.
+    """
+
+    def __init__(self) -> None:
+        self._windows: dict[str, list[float]] = {}
+=======
 # ── Rate Limiter (Redis-backed sliding window) ──────────────
 
 
@@ -262,6 +342,7 @@ class RateLimiter:
             )
             self._redis = None
         return self._redis
+>>>>>>> origin/main
 
     def check(
         self,
@@ -271,6 +352,25 @@ class RateLimiter:
         window_seconds: int = 60,
     ) -> None:
         """Check rate limit. Raises RateLimitError if exceeded."""
+<<<<<<< HEAD
+        now = time.time()
+        window_start = now - window_seconds
+
+        if key not in self._windows:
+            self._windows[key] = []
+
+        # Clean old entries
+        self._windows[key] = [t for t in self._windows[key] if t > window_start]
+
+        if len(self._windows[key]) >= max_requests:
+            retry_after = self._windows[key][0] - window_start + window_seconds
+            raise RateLimitError(
+                "Rate limit exceeded",
+                retry_after_seconds=max(0, retry_after),
+            )
+
+        self._windows[key].append(now)
+=======
         conn = self._get_redis()
         if conn is None:
             return
@@ -339,6 +439,7 @@ class RateLimiter:
             conn.delete(f"{self._PREFIX}{key}")
         except Exception as exc:
             logger.warning("Rate limiter reset failed", error=str(exc))
+>>>>>>> origin/main
 
 
 rate_limiter = RateLimiter()
@@ -346,10 +447,14 @@ rate_limiter = RateLimiter()
 
 # ── FastAPI Dependency ───────────────────────────────────────
 
+<<<<<<< HEAD
+async def get_current_user(authorization: str = "") -> AuthContext:
+=======
 
 async def get_current_user(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> AuthContext:
+>>>>>>> origin/main
     """FastAPI dependency for extracting authenticated user."""
     if not authorization:
         raise AuthError("No authorization header")

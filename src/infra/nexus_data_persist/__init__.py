@@ -107,6 +107,12 @@ async def get_session(tenant_id: str | None = None):
         await session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '60000'"))
 
         if tenant_id:
+<<<<<<< HEAD
+            await session.execute(
+                text("SET LOCAL app.tenant_id = :tid"),
+                {"tid": tenant_id},
+            )
+=======
             # SET does not support $1 bind parameters in PostgreSQL.
             # tenant_id comes from a verified JWT (AuthContext), not
             # user input, so quoting it as a literal is safe here.
@@ -114,6 +120,7 @@ async def get_session(tenant_id: str | None = None):
 
             safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", tenant_id)
             await session.execute(text(f"SET LOCAL app.tenant_id = '{safe_tid}'"))
+>>>>>>> origin/main
 
         yield session
         await session.commit()
