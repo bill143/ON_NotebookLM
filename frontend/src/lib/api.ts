@@ -319,6 +319,13 @@ class NexusClient {
     });
   }
 
+  async setDefaultModel(taskType: string, modelId: string): Promise<unknown> {
+    return this.request("POST", "/api/v1/models/defaults", {
+      task_type: taskType,
+      model_id: modelId,
+    });
+  }
+
   async getUsageSummary(days?: number): Promise<UsageSummary> {
     const qs = days ? `?days=${days}` : "";
     return this.request("GET", `/api/v1/models/usage/summary${qs}`);

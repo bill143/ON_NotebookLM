@@ -185,7 +185,7 @@ class BaseRepository:
     )
 
     # Tables that don't have an updated_at column
-    _NO_UPDATED_AT = frozenset({"audit_logs"})
+    _NO_UPDATED_AT = frozenset({"audit_logs", "default_models"})
 
     def __init__(self, table_name: str) -> None:
         _validate_identifier(table_name)

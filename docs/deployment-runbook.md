@@ -21,21 +21,21 @@ cp .env.example .env    # Edit with your API keys
 # 2. Start infrastructure
 docker compose -f deploy/docker-compose.yml up -d postgres redis
 
-# 3. Apply database schema
-PGPASSWORD=nexus_dev_2024 psql -h localhost -U nexus -d nexus_notebook_11 \
-  -f database/schema/001_initial.sql
-
-# 4. Run migrations
+# 3. Run migrations (migration 001 applies database/schema/001_initial.sql
+#    itself — do NOT apply the raw SQL file manually first).
+#    Note: on a compose-fresh postgres volume, initdb already applied
+#    001_initial.sql via the mounted init script; in that case run
+#    `alembic stamp 001_initial` once before `alembic upgrade head`.
 alembic upgrade head
 
-# 5. Seed AI models
+# 4. Seed AI models, defaults, and prompt versions (idempotent)
 python -m database.seeds.seed_models
 
-# 6. Start backend
+# 5. Start backend
 pip install -e ".[dev]"
 uvicorn src.main:app --reload --port 8000
 
-# 7. Start frontend
+# 6. Start frontend
 cd frontend && npm install && npm run dev
 ```
 

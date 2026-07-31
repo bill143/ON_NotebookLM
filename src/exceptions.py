@@ -28,6 +28,10 @@ class NexusError(Exception):
     severity: ErrorSeverity = ErrorSeverity.HIGH
     error_code: str = "NEXUS_INTERNAL_ERROR"
     retryable: bool = False
+    # When set, this is returned to clients instead of self.message — for error
+    # classes whose messages carry internals (raw SQL, driver errors). The real
+    # message still goes to server logs via the error handler.
+    public_message: str | None = None
 
     def __init__(
         self,
@@ -46,7 +50,7 @@ class NexusError(Exception):
         return {
             "error": {
                 "code": self.error_code,
-                "message": self.message,
+                "message": self.public_message or self.message,
                 "retryable": self.retryable,
             }
         }
@@ -244,6 +248,8 @@ class DatabaseError(NexusError):
     severity = ErrorSeverity.HIGH
     error_code = "DATABASE_ERROR"
     retryable = True
+    # DB error messages embed raw SQL and driver details — never send to clients
+    public_message = "A database error occurred. Please retry."
 
 
 class TransactionConflictError(DatabaseError):
@@ -251,6 +257,7 @@ class TransactionConflictError(DatabaseError):
 
     error_code = "TRANSACTION_CONFLICT"
     retryable = True
+    public_message = "The record was modified concurrently. Please retry."
 
 
 # ── Plugin Errors ────────────────────────────────────────────

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, AIModel, BudgetStatus, UsageSummary } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
@@ -26,7 +26,7 @@ export function SettingsPanel() {
 
   // Local form state
   const [theme, setTheme] = useState("dark");
-  const [defaultModel, setDefaultModel] = useState("gemini-2.5-flash");
+  const [defaultModel, setDefaultModel] = useState("");
   const [budgetLimit, setBudgetLimit] = useState(50);
   const [apiKeys, setApiKeys] = useState({
     openai: "",
@@ -34,6 +34,34 @@ export function SettingsPanel() {
     elevenlabs: "",
     anthropic: "",
   });
+
+  // Live data from the backend
+  const [models, setModels] = useState<AIModel[]>([]);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [budget, setBudget] = useState<BudgetStatus | null>(null);
+
+  useEffect(() => {
+    api
+      .listModels()
+      .then((list) => {
+        setModels(list);
+        const chatModels = list.filter((m) => m.model_type === "chat");
+        if (chatModels.length > 0) {
+          const preferred =
+            chatModels.find((m) => m.model_id_string === "gpt-4o-mini") ?? chatModels[0];
+          setDefaultModel((prev) => prev || preferred.id);
+        }
+      })
+      .catch(() => {});
+    api.getUsageSummary().then(setUsage).catch(() => {});
+    api
+      .getBudgetStatus()
+      .then((b) => {
+        setBudget(b);
+        if (b.limit_usd > 0) setBudgetLimit(b.limit_usd);
+      })
+      .catch(() => {});
+  }, []);
 
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -48,6 +76,17 @@ export function SettingsPanel() {
         // Stored encrypted server-side; don't keep plaintext in component state.
         setApiKeys({ openai: "", google: "", elevenlabs: "", anthropic: "" });
       }
+
+      // Persist the selected default chat model; every other task type falls
+      // back to the chat default server-side.
+      if (defaultModel) {
+        await api.setDefaultModel("chat", defaultModel);
+      }
+      const embedding = models.find((m) => m.model_type === "embedding");
+      if (embedding) {
+        await api.setDefaultModel("embedding", embedding.id).catch(() => {});
+      }
+
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -140,15 +179,20 @@ export function SettingsPanel() {
                   onChange={(e) => setDefaultModel(e.target.value)}
                   className="w-full h-10 px-3 rounded-lg bg-secondary/50 border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Cloud)</option>
-                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Cloud)</option>
-                  <option value="gpt-4o">GPT-4o (Cloud)</option>
-                  <option value="claude-3.5-sonnet">Claude 3.5 Sonnet (Cloud)</option>
-                  <option value="ollama/llama3.3">Llama 3.3 (Local/Ollama)</option>
-                  <option value="ollama/mistral">Mistral (Local/Ollama)</option>
+                  {models.filter((m) => m.model_type === "chat").length === 0 ? (
+                    <option value="">No models registered yet</option>
+                  ) : (
+                    models
+                      .filter((m) => m.model_type === "chat")
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.is_local ? "Local" : m.provider})
+                        </option>
+                      ))
+                  )}
                 </select>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Used for chat, research, and content generation
+                  Used for chat, research, and content generation — saved when you click Save Settings
                 </p>
               </div>
 
@@ -231,31 +275,33 @@ export function SettingsPanel() {
                   Current Usage
                 </h4>
                 <div className="space-y-3">
-                  <div className="flex justify-between text-sm">
-                    <span>Chat & Research</span>
-                    <span className="font-mono">$2.14</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span>Audio Generation</span>
-                    <span className="font-mono">$0.87</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span>Embeddings</span>
-                    <span className="font-mono">$0.03</span>
-                  </div>
+                  {usage && Object.keys(usage.by_feature ?? {}).length > 0 ? (
+                    Object.entries(usage.by_feature).map(([feature, f]) => (
+                      <div key={feature} className="flex justify-between text-sm">
+                        <span className="capitalize">{feature.replace(/_/g, " ")}</span>
+                        <span className="font-mono">${f.cost_usd.toFixed(2)}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No usage recorded yet</p>
+                  )}
                   <div className="h-px bg-border" />
                   <div className="flex justify-between text-sm font-semibold">
                     <span>Total</span>
-                    <span className="font-mono">$3.04</span>
+                    <span className="font-mono">
+                      ${(usage?.total_cost_usd ?? budget?.usage_usd ?? 0).toFixed(2)}
+                    </span>
                   </div>
                   <div className="w-full h-2 rounded-full bg-secondary overflow-hidden">
                     <div
                       className="h-full rounded-full bg-gradient-to-r from-primary to-purple-500 transition-all"
-                      style={{ width: `${(3.04 / budgetLimit) * 100}%` }}
+                      style={{
+                        width: `${Math.min(100, ((usage?.total_cost_usd ?? 0) / Math.max(budgetLimit, 0.01)) * 100)}%`,
+                      }}
                     />
                   </div>
                   <p className="text-xs text-muted-foreground text-right">
-                    {((3.04 / budgetLimit) * 100).toFixed(1)}% of ${budgetLimit}
+                    {(((usage?.total_cost_usd ?? 0) / Math.max(budgetLimit, 0.01)) * 100).toFixed(1)}% of ${budgetLimit}
                   </p>
                 </div>
               </div>
